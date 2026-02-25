@@ -1,0 +1,366 @@
+---
+title: Configuration Schema
+description: Complete reference for every field in contractual.yaml — the single configuration file for Contractual.
+---
+
+import { Aside, Code, Tabs, TabItem } from '@astrojs/starlight/components';
+
+`contractual.yaml` lives at the root of your repository (or at the root of a service directory in a monorepo). Every field is documented below.
+
+For IDE autocompletion, add the schema comment to your file — VS Code with the YAML extension and any editor supporting the YAML Language Server will provide inline validation and completions automatically:
+
+```yaml
+# yaml-language-server: $schema=https://contractual.dev/schema.json
+```
+
+You can also register the schema manually in VS Code settings:
+
+```json
+{
+  "yaml.schemas": {
+    "https://contractual.dev/schema.json": "contractual.yaml"
+  }
+}
+```
+
+The published JSON Schema is available at [`https://contractual.dev/schema.json`](https://contractual.dev/schema.json) and is registered on [SchemaStore.org](https://www.schemastore.org/json/).
+
+---
+
+## Full annotated example
+
+The complete configuration with every optional field set:
+
+```yaml
+# yaml-language-server: $schema=https://contractual.dev/schema.json
+
+contracts:
+  - name: orders-api          # unique identifier, used in changesets and version history
+    type: openapi             # openapi | json-schema | asyncapi | odcs
+    path: ./specs/orders.openapi.yaml
+    lint: redocly lint {spec} --format stylish   # override default linter
+    breaking: ./scripts/diff.sh {old} {new}      # override default differ
+    generate:
+      - openapi-typescript {spec} -o ./src/api/orders.ts
+
+  - name: order-schema
+    type: json-schema
+    path: ./schemas/order.schema.json
+    lint: false               # disable linting for this contract
+    breaking: false           # disable breaking change detection
+
+changeset:
+  autoDetect: true            # auto-classify changes as major/minor/patch
+  requireOnPR: true           # fail pr-check if spec changes have no changeset
+
+ai:
+  provider: anthropic         # only 'anthropic' is supported currently
+  model: claude-opus-4-5-20251101
+  features:
+    explain: true             # LLM explains detected changes in PR comments
+    changelog: true           # LLM enriches changelog entries
+    enhance: false            # LLM auto-fills descriptions and examples in specs
+```
+
+---
+
+## `contracts`
+
+**Type:** `array` (of contract objects)
+**Required:** Yes
+
+The list of contracts Contractual manages. Every command — `lint`, `breaking`, `changeset`, `version`, `status` — operates on all contracts unless filtered with `--contract`.
+
+You must define at least one contract.
+
+---
+
+### `contracts[].name`
+
+**Type:** `string`
+**Required:** Yes
+
+Unique identifier for this contract. Contractual uses this name in:
+
+- Changeset file frontmatter (`"orders-api": major`)
+- Version history (`versions.json`)
+- Snapshot filenames (`.contractual/history/orders-api/`)
+- CLI output and PR comment tables
+
+Must be a valid slug: lowercase letters, numbers, and hyphens. No spaces.
+
+```yaml
+contracts:
+  - name: orders-api
+```
+
+---
+
+### `contracts[].type`
+
+**Type:** `'openapi' | 'json-schema' | 'asyncapi' | 'odcs'`
+**Required:** Yes
+
+The format of the spec file. Contractual uses this to select the default linter and differ.
+
+| Value | Format | Default linter | Default differ |
+|-------|--------|---------------|----------------|
+| `openapi` | OpenAPI 3.x | Redocly CLI | Built-in structural differ |
+| `json-schema` | JSON Schema Draft-07 / 2019-09 / 2020-12 | ajv meta-validation | Built-in structural differ |
+| `asyncapi` | AsyncAPI 2.x / 3.x | @asyncapi/parser | Built-in (planned) |
+| `odcs` | Open Data Contract Standard v3.x | ajv vs ODCS schema | Built-in (planned) |
+
+```yaml
+contracts:
+  - name: order-schema
+    type: json-schema
+```
+
+---
+
+### `contracts[].path`
+
+**Type:** `string`
+**Required:** Yes
+
+Path to the spec file, relative to the location of `contractual.yaml`. Glob patterns are supported for specs that are split across multiple files.
+
+```yaml
+contracts:
+  - name: orders-api
+    path: ./specs/orders.openapi.yaml
+
+  - name: event-schemas
+    path: ./schemas/**/*.schema.json   # glob — treats all matches as one contract
+```
+
+<Aside type="note">
+When using a glob pattern, Contractual concatenates all matched files before linting and diffing. This is useful for AsyncAPI specifications split by channel.
+</Aside>
+
+---
+
+### `contracts[].lint`
+
+**Type:** `string | false`
+**Required:** No
+**Default:** The default linter for the contract `type`
+
+Override the linter command for this contract. Use `{spec}` as a placeholder for the resolved spec file path.
+
+```yaml
+# Use Spectral instead of the default Redocly linter
+lint: spectral lint {spec} --format json
+
+# Use a custom script
+lint: ./scripts/validate.sh {spec}
+
+# Disable linting entirely for this contract
+lint: false
+```
+
+When set to `false`, Contractual skips the lint step for this contract. The `lint` CLI command still exits 0 for that contract.
+
+---
+
+### `contracts[].breaking`
+
+**Type:** `string | false`
+**Required:** No
+**Default:** The default differ for the contract `type`
+
+Override the breaking change detection command. Use `{old}` and `{new}` as placeholders for the paths to the previous snapshot and the current spec file.
+
+```yaml
+# Use a custom differ script
+breaking: ./scripts/diff.py {old} {new}
+
+# Use a custom differ with specific flags
+breaking: ./bin/my-differ --old {old} --new {new} --format json
+
+# Disable breaking change detection for this contract
+breaking: false
+```
+
+When set to `false`, Contractual treats the contract as having no detectable changes. The `breaking` command exits 0 and generates no change classifications.
+
+---
+
+### `contracts[].generate`
+
+**Type:** `array` of `string`
+**Required:** No
+
+Commands to run after a successful version bump. Use `{spec}` for the spec path, `{name}` for the contract name, and `{version}` for the new version string.
+
+```yaml
+generate:
+  - openapi-typescript {spec} -o ./src/generated/{name}.ts
+  - orval --input {spec} --output ./src/api/
+```
+
+<Aside type="caution">
+`generate` commands run during `contractual version`, not on every lint or diff. They are intended for code generation triggered by a release, not for validation.
+</Aside>
+
+---
+
+## `changeset`
+
+**Type:** `object`
+**Required:** No
+
+Controls how Contractual handles changeset files.
+
+---
+
+### `changeset.autoDetect`
+
+**Type:** `boolean`
+**Required:** No
+**Default:** `true`
+
+When `true`, Contractual uses the structural diff output to automatically classify each detected change as `major`, `minor`, or `patch` and writes that classification into the generated changeset file.
+
+Set to `false` if you prefer to classify all changes manually.
+
+```yaml
+changeset:
+  autoDetect: false
+```
+
+---
+
+### `changeset.requireOnPR`
+
+**Type:** `boolean`
+**Required:** No
+**Default:** `true`
+
+When `true` and running in GitHub Action `pr-check` mode, the action will fail if spec changes are detected but no changeset file exists — unless `auto-changeset: true` is set on the action input (which auto-generates one).
+
+Set to `false` to make changesets optional in PRs.
+
+```yaml
+changeset:
+  requireOnPR: false
+```
+
+---
+
+## `ai`
+
+**Type:** `object`
+**Required:** No
+
+Configuration for optional LLM integration. All AI features degrade gracefully when no API key is available — the tool continues to work without them.
+
+---
+
+### `ai.provider`
+
+**Type:** `'anthropic'`
+**Required:** No
+**Default:** `'anthropic'`
+
+The LLM provider. Only `anthropic` is supported in the current release.
+
+```yaml
+ai:
+  provider: anthropic
+```
+
+---
+
+### `ai.model`
+
+**Type:** `string`
+**Required:** No
+**Default:** `claude-opus-4-5-20251101`
+
+The model identifier to pass to the provider API. Use this to pin a specific model version or switch to a faster, lower-cost model for high-volume repositories.
+
+```yaml
+ai:
+  model: claude-sonnet-4-5-20250929
+```
+
+---
+
+### `ai.features`
+
+**Type:** `object`
+**Required:** No
+
+Toggles for individual AI capabilities. All features default to `false` — you must opt in explicitly.
+
+---
+
+#### `ai.features.explain`
+
+**Type:** `boolean`
+**Default:** `false`
+
+When `true`, Contractual sends the structural diff to the LLM and includes a natural-language explanation of each change in the PR comment. Helps reviewers understand the impact of contract changes without reading raw schema diffs.
+
+```yaml
+ai:
+  features:
+    explain: true
+```
+
+---
+
+#### `ai.features.changelog`
+
+**Type:** `boolean`
+**Default:** `false`
+
+When `true`, Contractual generates an LLM-enriched changelog entry in `CHANGELOG.md` instead of the default template-formatted entry. The enriched entry includes context about what changed and why it matters to consumers.
+
+```yaml
+ai:
+  features:
+    changelog: true
+```
+
+---
+
+#### `ai.features.enhance`
+
+**Type:** `boolean`
+**Default:** `false`
+
+When `true`, Contractual can suggest additions to spec metadata — descriptions, examples, and titles — for fields that lack them. This is an interactive feature intended for use with the CLI, not in automated CI runs.
+
+```yaml
+ai:
+  features:
+    enhance: true
+```
+
+---
+
+## Defaults table
+
+When a field is omitted, Contractual uses these defaults:
+
+| Field | Default |
+|-------|---------|
+| `contracts[].lint` | Default linter for the contract `type` |
+| `contracts[].breaking` | Default differ for the contract `type` |
+| `contracts[].generate` | `[]` (no generation) |
+| `changeset.autoDetect` | `true` |
+| `changeset.requireOnPR` | `true` |
+| `ai.provider` | `'anthropic'` |
+| `ai.model` | `claude-opus-4-5-20251101` |
+| `ai.features.explain` | `false` |
+| `ai.features.changelog` | `false` |
+| `ai.features.enhance` | `false` |
+
+## See also
+
+- [Guide: Configuration](/guides/configuration) — Progressive examples from minimal to full configuration
+- [Guide: Custom Linters and Differs](/guides/custom-governance) — Placeholder reference and custom command patterns
+- [Guide: AI-Powered Features](/guides/ai-features) — Setup, cost, and privacy details
+- [JSON Schema](https://contractual.dev/schema.json) — Machine-readable schema for IDE integration

@@ -1,0 +1,293 @@
+---
+title: Migrating from Manual Versioning
+description: Bring existing API specs under Contractual without losing your version history. Establish a baseline, import existing changelogs, and adopt the changeset workflow gradually.
+---
+
+import { Aside, Steps, Tabs, TabItem } from '@astrojs/starlight/components';
+
+If your team has been managing contract versions manually — updating a version field in the spec, editing a `CHANGELOG.md` by hand, or using no versioning at all — you can migrate to Contractual without starting from zero. This recipe walks through the migration path for the three most common starting points.
+
+## Before you start
+
+Audit your current state:
+
+- Do your spec files have a `version` field (OpenAPI `info.version`, AsyncAPI `info.version`)?
+- Do you have an existing `CHANGELOG.md` with historical entries?
+- Is there a single spec or multiple?
+- Do you have a baseline snapshot to compare against, or is this the first version ever?
+
+The answers determine which migration path to follow.
+
+## Migration path 1: No version history (greenfield-style migration)
+
+Your specs exist but have never been formally versioned. You want to start from a clean baseline at `1.0.0` (or wherever you are now).
+
+<Steps>
+
+1. Install Contractual.
+
+   ```bash
+   npm install --save-dev @contractual/cli
+   ```
+
+2. Run `contractual init` from the root of your repository. Contractual scans for spec files and scaffolds the configuration.
+
+   ```bash
+   contractual init
+   ```
+
+   Expected output:
+
+   ```
+   Scanning for contracts...
+
+     Found specs/orders.openapi.yaml    → OpenAPI
+     Found schemas/order.schema.json    → JSON Schema
+
+   Scaffolding contractual.yaml...      done
+   Scaffolding .contractual/            done
+
+   Run `contractual lint` to validate your contracts.
+   ```
+
+3. Open the generated `contractual.yaml` and verify the contract names and spec paths.
+
+   ```yaml
+   # yaml-language-server: $schema=https://contractual.dev/schema.json
+
+   contracts:
+     - name: orders-api
+       type: openapi
+       spec: ./specs/orders.openapi.yaml
+
+     - name: order-schema
+       type: json-schema
+       spec: ./schemas/order.schema.json
+   ```
+
+4. Edit `.contractual/versions.json` to reflect your current version. By default `contractual init` sets all contracts to `0.0.0`. Change them to your real current version.
+
+   ```json
+   {
+     "orders-api": "2.3.1",
+     "order-schema": "1.4.0"
+   }
+   ```
+
+5. Create baseline snapshots. `contractual version` creates snapshots, but it requires existing changesets to consume. For the initial baseline, create snapshots manually by copying your spec files into the snapshots directory.
+
+   ```bash
+   mkdir -p .contractual/snapshots/orders-api
+   mkdir -p .contractual/snapshots/order-schema
+
+   cp specs/orders.openapi.yaml .contractual/snapshots/orders-api/2.3.1.yaml
+   cp schemas/order.schema.json .contractual/snapshots/order-schema/1.4.0.json
+   ```
+
+6. Commit everything.
+
+   ```bash
+   git add contractual.yaml .contractual/
+   git commit -m "chore: initialize Contractual with existing contracts at current versions"
+   ```
+
+</Steps>
+
+From this point forward, Contractual has a baseline to compare against. The next time a spec changes, `contractual breaking` will diff against the snapshot you just created.
+
+<Aside type="note">
+The snapshot file extension must match the spec file extension. OpenAPI specs with `.yaml` extension produce `.yaml` snapshots. JSON Schema specs with `.json` produce `.json` snapshots.
+</Aside>
+
+## Migration path 2: Existing version history in spec files
+
+Your OpenAPI or AsyncAPI spec has `info.version` set, and you have been updating it manually. You want Contractual to take over version management.
+
+<Steps>
+
+1. Follow steps 1–3 from Migration path 1 to install and initialize Contractual.
+
+2. Read the current version from your spec file and set it in `versions.json`.
+
+   For an OpenAPI spec with `info.version: "3.1.0"`:
+
+   ```json
+   {
+     "orders-api": "3.1.0"
+   }
+   ```
+
+3. Create the baseline snapshot for that version.
+
+   ```bash
+   mkdir -p .contractual/snapshots/orders-api
+   cp specs/orders.openapi.yaml .contractual/snapshots/orders-api/3.1.0.yaml
+   ```
+
+4. Stop manually updating `info.version` in your spec. Going forward, Contractual owns the version number and you should remove the version field from your spec, or leave it as a static string — Contractual does not read it from the spec file, only from `versions.json`.
+
+   ```yaml
+   # Before (manual versioning):
+   info:
+     title: Orders API
+     version: "3.1.0"   # You updated this manually
+
+   # After (Contractual-managed):
+   info:
+     title: Orders API
+     version: "managed-by-contractual"   # Or remove the field if your tooling allows
+   ```
+
+   <Aside type="tip">
+   Some OpenAPI tools require `info.version` to be present and may break if you remove it. In that case, leave a static string like `"see CHANGELOG.md"` or use the `{version}` placeholder in an output command to inject it at generation time.
+   </Aside>
+
+5. Commit the migration.
+
+   ```bash
+   git add contractual.yaml .contractual/
+   git commit -m "chore: migrate Orders API to Contractual versioning at 3.1.0"
+   ```
+
+</Steps>
+
+## Migration path 3: Existing CHANGELOG.md
+
+You have a `CHANGELOG.md` with historical entries. You want to keep it intact and let Contractual append future entries without overwriting history.
+
+Contractual appends new entries to the top of `CHANGELOG.md`, above any existing content. It does not parse or modify existing entries. Your history is safe.
+
+The only thing you need to verify is the file location. Contractual looks for `CHANGELOG.md` in the same directory as `contractual.yaml`. If your existing changelog is elsewhere, either move it or configure the path:
+
+```yaml
+# yaml-language-server: $schema=https://contractual.dev/schema.json
+
+contracts:
+  - name: orders-api
+    type: openapi
+    spec: ./specs/orders.openapi.yaml
+
+publish:
+  changelogPath: ./docs/CHANGELOG.md   # Custom path if needed
+```
+
+After Contractual writes its first entry, your changelog will look like this:
+
+```markdown
+# Changelog
+
+## 3.2.0 — 2026-02-18
+
+### Minor Changes
+
+- orders-api: Added `shipping_address` field to the Order response.
+
+---
+
+<!-- Everything below this line was written before Contractual was adopted. -->
+
+## 3.1.0 — 2026-01-15
+
+### Added
+
+- Added pagination support to GET /orders
+
+## 3.0.0 — 2025-12-01
+
+...
+```
+
+## Gradual adoption strategy
+
+Adopting Contractual across a large repository with many specs does not need to happen all at once. You can migrate one contract at a time.
+
+**Week 1:** Add Contractual to your repository, configure it for one contract only, and establish the baseline. Run the PR check on that contract. Leave other contracts alone.
+
+```yaml
+# contractual.yaml — start with one contract
+contracts:
+  - name: orders-api
+    type: openapi
+    spec: ./specs/orders.openapi.yaml
+```
+
+**Week 2–3:** Monitor the PR check on the first contract. Fix any lint failures, get the team comfortable with the changeset workflow.
+
+**Week 4+:** Add remaining contracts to `contractual.yaml` one at a time. Create baseline snapshots for each as you add them.
+
+```yaml
+# contractual.yaml — add contracts over time
+contracts:
+  - name: orders-api       # Week 1
+    type: openapi
+    spec: ./specs/orders.openapi.yaml
+
+  - name: products-api     # Week 3
+    type: openapi
+    spec: ./specs/products.openapi.yaml
+
+  - name: order-schema     # Week 5
+    type: json-schema
+    spec: ./schemas/order.schema.json
+```
+
+<Aside type="tip">
+For each new contract you add to `contractual.yaml`, immediately create its baseline snapshot before opening any PRs that change that spec. Without a snapshot, `contractual breaking` cannot run for that contract.
+</Aside>
+
+## Dealing with drift between spec and snapshot
+
+If your spec has changed significantly since the version in `versions.json`, the first `contractual breaking` run may report many changes. This is expected — the snapshot reflects the state at the version you set, and the current spec may have diverged.
+
+Options:
+
+**Option A: Treat current state as the new baseline.** If you cannot untangle what changed since the last version, take a new snapshot at a bumped version:
+
+```bash
+# Bump the version in versions.json manually to the next sensible version
+# then copy the current spec as the new snapshot
+echo '{"orders-api": "4.0.0"}' > .contractual/versions.json
+cp specs/orders.openapi.yaml .contractual/snapshots/orders-api/4.0.0.yaml
+```
+
+**Option B: Find the right snapshot commit.** If your spec is in git, find the commit that corresponds to the version in `versions.json` and extract the spec at that point:
+
+```bash
+git show main~20:specs/orders.openapi.yaml > .contractual/snapshots/orders-api/3.1.0.yaml
+```
+
+## Verifying the migration
+
+After setting up the baseline, verify that Contractual can run successfully before pushing:
+
+```bash
+# Lint should pass
+contractual lint
+
+# Breaking should show no changes (spec matches the snapshot you just created)
+contractual breaking
+```
+
+If `contractual breaking` reports changes after you just copied the spec as the snapshot, check that the snapshot file extension matches the spec file extension, and that the path in `versions.json` matches the snapshot filename.
+
+```bash
+# List what Contractual sees
+contractual status
+```
+
+Expected output:
+
+```
+Contract status:
+
+  orders-api    2.3.1   specs/orders.openapi.yaml   ✓ snapshot exists
+  order-schema  1.4.0   schemas/order.schema.json   ✓ snapshot exists
+
+No pending changesets.
+```
+
+## Next steps
+
+- [Managing Versions](/guides/versioning) — the full changeset and versioning lifecycle
+- [GitHub Action Setup](/guides/github-action) — add the PR check to your repository
+- [Configuration](/guides/configuration) — complete `contractual.yaml` reference

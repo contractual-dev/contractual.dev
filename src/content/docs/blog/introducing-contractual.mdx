@@ -1,0 +1,199 @@
+---
+title: Introducing Contractual
+date: 2024-02-18
+description: Schema contract lifecycle management for OpenAPI, JSON Schema, AsyncAPI, and ODCS.
+authors:
+  - contractual
+tags:
+  - release
+  - openapi
+  - json-schema
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+API schemas are contracts. They describe what producers send and what consumers expect. When a contract changes in a way that breaks consumers — a field removed, a type narrowed, a required property added — something downstream crashes. Finding out in production is expensive. Finding out in a PR review is free.
+
+Contractual is a CLI and GitHub Action that detects breaking changes in your API specs, auto-generates changelogs, and manages versions across OpenAPI, JSON Schema, AsyncAPI, and ODCS.
+
+---
+
+## What it does
+
+Contractual wraps your existing schema tooling and adds a lifecycle layer that none of those tools provide:
+
+```
+contractual init       Scan your repo and generate contractual.yaml
+contractual lint       Validate all contracts (Redocly, Spectral, ajv)
+contractual breaking   Detect breaking changes vs the last released snapshot
+contractual changeset  Record a changeset for the current changes
+contractual version    Consume changesets, bump versions, update changelog
+contractual status     Show current versions and pending changesets
+```
+
+A typical PR workflow looks like this:
+
+1. Developer edits `orders.openapi.yaml` — removes an endpoint
+2. `contractual breaking` runs in CI and finds the removal
+3. The GitHub Action posts a PR comment with the diff table:
+
+```
+orders-api  1 breaking change, 2 non-breaking changes
+
+BREAKING    Removed endpoint GET /orders/{id}/details
+NON-BREAKING Added optional field 'shipping_address' to Order
+NON-BREAKING Added optional field 'gift_message' to Order
+```
+
+4. `contractual changeset` generates `.contractual/changesets/fuzzy-tiger-runs.md` with the change summary
+5. When the PR merges, the GitHub Action opens a "Version Contracts" PR that bumps `orders-api` to its next major version and appends the changelog
+
+No manual changelog editing. No forgotten version bumps. No PRs merged before anyone noticed the breaking change.
+
+---
+
+## Why we built it
+
+The immediate inspiration was [Buf](https://buf.build). Buf solved the Protobuf ecosystem's tooling fragmentation — linting, breaking change detection, a registry — in a way that the ecosystem immediately recognized as the right answer. Before Buf, teams were writing custom scripts, running `protoc` in CI, and hoping for the best.
+
+The same problem exists for OpenAPI, JSON Schema, AsyncAPI, and ODCS. The tooling is more fragmented because the formats are more varied, but the core need is identical: teams need to know when a schema change breaks consumers, and they need that signal before the change ships.
+
+The existing options all have significant gaps:
+
+- Built-in differs handle breaking changes for all formats. Most existing tools focus on a single format or require external dependencies.
+- **Spectral and Redocly** are linters. They validate schemas against stylistic rules, not against previous versions.
+- **Pact** does consumer-driven contract testing, which requires org-wide adoption, a Pact broker, and buy-in from every team consuming the API. It's powerful but heavyweight.
+- **Schema registries** (Confluent, AWS Glue) enforce compatibility at the broker level. They add infrastructure, runtime latency, and a deployment coupling that many teams can't accept. They're primarily designed for Avro and Protobuf, not OpenAPI or JSON Schema.
+
+The gap between "you need something" and "here's the specific something that fits" is what we built Contractual to fill.
+
+---
+
+## The changeset model
+
+We copied the changeset model from [Changesets](https://github.com/changesets/changesets). The core insight is correct: the person making the change has the most context about what that change means. Capturing that context at change time — not release time — produces better changelogs and more accurate version bumps.
+
+What Changesets does for npm packages, Contractual does for schema contracts. Changesets is not schema-aware (it reads commit messages and manual declarations, not schema diffs). Contractual is not a code package versioner. They're not competing; they solve different problems.
+
+A Contractual changeset looks like this:
+
+```markdown
+---
+"orders-api": major
+"order-schema": minor
+---
+
+## orders-api
+
+Removed GET /orders/{id}/details. Consumers using this endpoint must migrate to
+GET /orders/{id} which now includes the details payload.
+
+## order-schema
+
+Added optional shipping_address field to the Order object.
+```
+
+The CLI generates the file automatically from the detected diff. You review it, edit the description if needed, and commit it alongside the spec change. The release step reads all pending changesets, takes the highest bump per contract, and opens the version PR.
+
+---
+
+## The built-in structural differs
+
+For all formats, Contractual uses built-in structural differs that understand each format's semantics.
+
+For JSON Schema specifically, no production-quality differ existed in the ecosystem. The JSON Schema organization itself [accepted a GSoC 2026 project](https://github.com/json-schema-org/community/issues/984) specifically because this tooling gap was acknowledged. From that issue:
+
+> "JSON Schema has no way to answer a critical question: 'Will this schema change break existing data?' Teams choose Protobuf over JSON Schema partly because of missing compatibility tooling."
+
+Contractual ships a structural JSON Schema differ today. It performs a depth-first traversal of both schemas, resolves `$ref` pointers, and classifies each change as breaking, non-breaking, or patch according to a defined set of rules:
+
+| Change | Classification |
+|---|---|
+| Property removed | Breaking |
+| Required property added | Breaking |
+| Type narrowed (string to enum, number to integer) | Breaking |
+| Constraint tightened (minLength increased, maxLength decreased) | Breaking |
+| Enum value removed | Breaking |
+| Optional property added | Non-breaking |
+| Constraint loosened | Non-breaking |
+| Enum value added | Non-breaking |
+| title, description, examples changed | Patch |
+
+The one genuinely hard category is composition keywords — `anyOf`, `oneOf`, `not`. Determining whether a change to a composition is breaking requires computing the intersection of accepted value sets, which is undecidable in the general case. When Contractual encounters a change inside a composition, it flags it as Unknown and asks for human review. The second blog post covers this in depth.
+
+---
+
+## Design decisions
+
+### Wrapping existing tools rather than replacing them
+
+Contractual does not re-implement existing linters like Redocly or Spectral. It can run them as subprocesses and integrate their output into the workflow. This means you can use battle-tested tools without Contractual needing to maintain that surface area.
+
+The config makes this explicit:
+
+```yaml
+# contractual.yaml
+contracts:
+  - name: orders-api
+    type: openapi
+    spec: ./specs/orders.openapi.yaml
+    lint:
+      command: redocly lint {spec}
+    # diff uses built-in OpenAPI differ by default
+
+  - name: order-schema
+    type: json-schema
+    spec: ./schemas/order.schema.json
+    # lint and diff use built-in defaults for json-schema
+```
+
+The `{spec}`, `{old}`, and `{new}` placeholders are substituted with actual file paths at runtime. You can replace the default linter or differ for any contract with any custom command that exits non-zero on failure.
+
+### Why the changeset model over conventional commits
+
+Conventional commits (`feat:`, `fix:`, `BREAKING CHANGE:`) work for code packages where the developer knows at commit time what they changed. For schema contracts, the developer often doesn't know whether their change is breaking without running a differ against the previous version. Asking developers to declare breaking changes in commit messages is asking them to do manually what a tool can do reliably.
+
+Changesets are generated after the differ runs, so they reflect the actual structural impact rather than the developer's self-assessment.
+
+### Why not integrate with schema registries
+
+Schema registries (Confluent Schema Registry, AWS Glue Schema Registry) enforce compatibility at the moment a schema is published to the registry — typically at deploy time or just before it. That's a useful signal, but it's the wrong point in the lifecycle for prevention.
+
+By the time a schema reaches a registry, the code that produces it has usually been written, reviewed, and merged. Finding a breaking change at that point means rolling back a deployment. Finding it in a PR costs nothing.
+
+Contractual and a schema registry are not alternatives. Teams using Confluent can still run `contractual breaking` in PRs to catch breaking changes 24 hours earlier.
+
+---
+
+## Getting started
+
+Install the CLI:
+
+```sh
+npm install -g contractual
+# or
+pnpm add -g contractual
+```
+
+In your repository:
+
+```sh
+contractual init
+```
+
+This scans for schema files and generates `contractual.yaml`. Review the generated config, then run:
+
+```sh
+contractual lint
+contractual breaking
+```
+
+For the full setup including the GitHub Action, see the [Quick Start guide](/getting-started/quickstart-cli).
+
+---
+
+## What's next
+
+The next post in this series is a technical deep-dive into how the JSON Schema differ works — the tree-walking algorithm, `$ref` resolution, the composition keyword problem, and what we got wrong on the first attempt.
+
+If you try Contractual and find a bug or a classification that seems wrong, open an issue on [GitHub](https://github.com/contractual-dev/contractual). The classification rules are the core of the tool, and we want them to be correct.

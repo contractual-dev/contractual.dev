@@ -1,0 +1,118 @@
+---
+title: Introduction
+description: Contractual is a CLI and GitHub Action that orchestrates the schema contract lifecycle — lint, breaking change detection, versioning, and changelog generation — for OpenAPI, JSON Schema, AsyncAPI, and ODCS.
+---
+
+import { Aside, Card, CardGrid, LinkCard } from '@astrojs/starlight/components';
+
+Contractual is a CLI and GitHub Action that orchestrates the schema contract lifecycle — lint, breaking change detection, versioning, and changelog generation — for OpenAPI, JSON Schema, AsyncAPI, and ODCS. Point it at your spec files, and it takes care of detecting what changed, classifying whether that change is breaking, generating a versioned changeset, bumping the contract version, and writing the changelog. In CI it posts a structured diff table directly to your pull request and opens an automated "Version Contracts" PR when you're ready to release.
+
+## Who is this for?
+
+Contractual is built for teams that:
+
+- Publish or internally distribute **OpenAPI specs, JSON Schemas, AsyncAPI documents, or ODCS contracts**
+- Have consumers — services, SDKs, clients — that depend on those schemas staying compatible
+- Want **automated breaking-change detection in CI** instead of relying on manual code review
+- Need a reproducible, auditable versioning story for their contracts
+
+You do not need to be using any particular language, framework, or API gateway. Contractual works alongside whatever generates or validates your schemas.
+
+## What does it replace?
+
+Before Contractual, a typical workflow looked like this:
+
+- Run breaking change detection manually (or forget to), compare output, decide yourself whether it's breaking
+- Write a custom shell script to bump a version in some config file
+- Copy-paste changes into a CHANGELOG.md
+- Hope someone remembers to do all this before merging
+- For JSON Schema: write your own differ from scratch, because nothing existed
+
+Contractual replaces all of those manual steps with a single command in CI and a config file that captures your governance rules once.
+
+## What you get
+
+- **Lint validation** — runs your configured linter (Redocly, Spectral, ajv, or your own command) against every registered contract on every push
+- **Structural breaking change detection** — schema-aware diff that classifies every change as breaking, non-breaking, or patch, not a line-by-line text diff
+- **Built-in JSON Schema differ** — the structural differ that nobody else ships; handles field removals, type narrowing, constraint tightening, enum changes, and required-field additions
+- **Auto-classified changesets** — machine-detected classification saved to a versioned markdown file you can review and override before merging
+- **Semver versioning** — consumes pending changesets, bumps contract versions, updates snapshots, all in one command
+- **Changelog generation** — per-contract CHANGELOG.md written automatically from changeset descriptions
+- **GitHub PR comments** — structured diff table posted inline on every pull request that touches a spec
+- **Optional AI explanations** — set `ANTHROPIC_API_KEY` and Contractual enriches PR comments and changelog entries with plain-language explanations of what changed and what consumers need to do
+
+## See it in action
+
+Here is what running `contractual breaking` looks like on a project with two contracts:
+
+```
+$ contractual breaking
+
+✗ orders-api: 2 breaking changes
+  BREAKING  Removed endpoint GET /orders/{id}/details
+  BREAKING  Changed type of field 'amount': string → number
+
+✓ order-schema: 1 non-breaking change
+  MINOR     Added optional field 'shipping_address'
+
+2 breaking changes detected. Exit code 1.
+```
+
+That output drives the PR comment, the changeset classification, and ultimately the version bump when you merge.
+
+<Aside type="tip">
+Contractual exits with code `1` when breaking changes are detected, so you can fail a required CI check to block merges. Set `--fail-on breaking` in the GitHub Action to enforce this.
+</Aside>
+
+## Where to go next
+
+Two paths depending on your role.
+
+### Maintainer path
+
+You want to set up Contractual in your repository, configure governance, and manage releases.
+
+<CardGrid>
+  <Card title="Installation" icon="laptop">
+    Install the CLI globally or as a dev dependency.
+
+    [Go to Installation](/getting-started/installation)
+  </Card>
+  <Card title="Quick Start: CLI" icon="terminal">
+    Zero to first working `contractual breaking` in 5 minutes.
+
+    [Go to CLI Quick Start](/getting-started/quickstart-cli)
+  </Card>
+  <Card title="Quick Start: GitHub Action" icon="github">
+    First PR check running in 5 minutes.
+
+    [Go to Action Quick Start](/getting-started/quickstart-action)
+  </Card>
+  <Card title="Configuration" icon="setting">
+    Complete reference for `contractual.yaml`.
+
+    [Go to Configuration](/guides/configuration)
+  </Card>
+</CardGrid>
+
+### Contributor path
+
+You opened a PR and Contractual left a comment. You need to understand what the comment means or edit the auto-generated changeset.
+
+<CardGrid>
+  <Card title="How Contractual Works" icon="information">
+    Mental model for the whole system in one page.
+
+    [Go to Concepts](/concepts/how-it-works)
+  </Card>
+  <Card title="The Changeset Model" icon="document">
+    What a changeset file is and why it exists.
+
+    [Go to Changesets](/concepts/changesets)
+  </Card>
+  <Card title="Changeset File Format" icon="open-book">
+    How to read and edit the auto-generated `.md` file.
+
+    [Go to Reference](/reference/changeset-format)
+  </Card>
+</CardGrid>

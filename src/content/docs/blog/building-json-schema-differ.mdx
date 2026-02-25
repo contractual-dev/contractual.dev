@@ -1,0 +1,342 @@
+---
+title: How We Built JSON Schema Breaking Change Detection
+date: 2024-02-18
+description: Technical deep dive into structural diffing for JSON Schema — tree walking, $ref resolution, composition keywords, and the edge cases that caused us to rethink our initial approach.
+authors:
+  - contractual
+tags:
+  - json-schema
+  - internals
+  - breaking-changes
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+JSON Schema has roughly 150 million weekly downloads on npm. Every major Node.js validation library — ajv, zod's output, joi, yup, typebox — either consumes JSON Schema or produces it. Data pipelines use it. Event buses use it. OpenAPI embeds it.
+
+Despite this adoption, there was no production tooling for a simple question: **will this schema change break existing data?**
+
+Not "did the file change" — any `git diff` answers that. The question is whether data that was valid against the old schema is still valid against the new schema, and whether data that was invalid against the old schema is now valid. One direction is breaking for producers. The other is breaking for consumers.
+
+This post describes the differ we built for Contractual, what it gets right, where it still has gaps, and why some of those gaps are inherent to the problem rather than implementation oversights.
+
+The related prior work from the JSON Schema organization: [GSoC 2026 issue #984](https://github.com/json-schema-org/community/issues/984), which was accepted in January 2025 as a 90-hour project. That project has not started. We built this independently.
+
+---
+
+## The problem with existing tools
+
+Before building anything, we evaluated what existed:
+
+**[getsentry/json-schema-diff](https://github.com/getsentry/json-schema-diff)** — The most complete open-source attempt. The README says: *"This library should be treated as best-effort."* It doesn't resolve `$ref`. It has known issues with `anyOf`/`oneOf`. We could not use it as a production dependency for a tool where false negatives mean undetected breaking changes.
+
+**ajv's meta-validation** — ajv validates a schema against the JSON Schema meta-schema. It tells you whether your schema is valid JSON Schema. It says nothing about whether your schema change is backward-compatible.
+
+**JSON Schema compatibility checkers from other ecosystems** — Java's `everit-org/json-schema` and Python's `jsonschema` library both support validation. Neither ships a differ. The Confluent Schema Registry supports JSON Schema compatibility checking, but it's designed around a registry model (you register schemas and the registry rejects incompatible ones), not a file-diff model, and it requires running Confluent infrastructure.
+
+None of these gave us what we needed: a library-quality, dependency-free differ that takes two schema objects and returns a structured classification of the differences.
+
+---
+
+## How tree walking works
+
+A JSON Schema document is a tree. The root is an object with keywords like `type`, `properties`, `required`, `items`, `anyOf`. Each value of `properties` is itself a schema object, and so on recursively.
+
+The differ performs a **depth-first traversal** of both schemas simultaneously. At each node, it compares the old value to the new value and records any differences.
+
+```
+Old schema:                    New schema:
+{                              {
+  type: "object",                type: "object",
+  properties: {                  properties: {
+    id: {                          id: {
+      type: "string"                 type: "string"
+    },                             },
+    amount: {                      amount: {
+      type: "string"  ←diff→        type: "number"
+    },                             },
+    status: {                      status: {
+      type: "string",                type: "string",
+      enum: [                        enum: [
+        "pending",                     "pending",
+        "complete"                     "complete",
+                       ←diff→          "cancelled"
+      ]                              ]
+    }                              }
+  },                           },
+  required: ["id", "amount"]   required: ["id", "amount"]
+}                              }
+```
+
+The traversal visits `properties.amount.type` and finds `string → number`. That's a narrowing change — values that were valid (any string) are no longer valid (only numbers are). Classification: **breaking**.
+
+It also visits `properties.status.enum` and finds that `"cancelled"` was added. Adding an enum value means more data is now valid. Classification: **non-breaking**.
+
+The algorithm in pseudo-code:
+
+```typescript
+function diff(oldSchema: Schema, newSchema: Schema, path: string): Change[] {
+  const changes: Change[] = [];
+
+  // Compare type
+  if (oldSchema.type !== newSchema.type) {
+    changes.push({
+      path,
+      kind: classifyTypeChange(oldSchema.type, newSchema.type),
+      description: `type changed: ${oldSchema.type} → ${newSchema.type}`,
+    });
+  }
+
+  // Compare properties
+  if (oldSchema.properties || newSchema.properties) {
+    changes.push(...diffProperties(oldSchema, newSchema, path));
+  }
+
+  // Compare constraints
+  changes.push(...diffConstraints(oldSchema, newSchema, path));
+
+  // Recurse into nested schemas
+  for (const key of Object.keys(newSchema.properties ?? {})) {
+    if (oldSchema.properties?.[key]) {
+      changes.push(
+        ...diff(oldSchema.properties[key], newSchema.properties[key], `${path}.properties.${key}`)
+      );
+    }
+  }
+
+  return changes;
+}
+```
+
+The real implementation handles around 40 keywords. The structure stays the same: compare the keyword value, classify the change, recurse.
+
+---
+
+## $ref resolution
+
+JSON Schema's `$ref` keyword introduces references that must be resolved before diffing. A schema like:
+
+```json
+{
+  "properties": {
+    "address": { "$ref": "#/$defs/Address" }
+  },
+  "$defs": {
+    "Address": {
+      "type": "object",
+      "properties": {
+        "street": { "type": "string" },
+        "city":   { "type": "string" }
+      }
+    }
+  }
+}
+```
+
+Must be resolved to:
+
+```json
+{
+  "properties": {
+    "address": {
+      "type": "object",
+      "properties": {
+        "street": { "type": "string" },
+        "city":   { "type": "string" }
+      }
+    }
+  }
+}
+```
+
+before diffing. Otherwise the differ sees `{ "$ref": "#/$defs/Address" }` as a leaf node and misses all the actual content.
+
+We resolve `$ref` pointers as a preprocessing step using JSON Pointer traversal (the `#/` prefix means "start at document root, then navigate by path segments"). The resolver builds a flattened schema with all references inlined.
+
+**The edge case that bit us:** moving a definition from inline to a `$ref`, or vice versa, should produce no diff if the resulting schema is identical. Our first implementation diffed the raw JSON, so it flagged this as a change. After adding pre-diff normalization that resolves refs before comparing, these no-op refactors produce zero changes.
+
+**Circular references** require special handling. A schema like:
+
+```json
+{
+  "type": "object",
+  "properties": {
+    "children": {
+      "type": "array",
+      "items": { "$ref": "#" }
+    }
+  }
+}
+```
+
+References itself. Without cycle detection, the resolver recurses infinitely. We track the set of `$ref` paths currently being resolved and stop when we encounter a path we're already resolving — recording the reference as a sentinel value that the differ knows to skip.
+
+---
+
+## Classification rules
+
+Once the tree is walked and `$ref` is resolved, each detected difference gets classified. The rules follow a simple principle: **a change is breaking if it makes previously-valid data invalid, or if it makes previously-invalid data valid in a way that could break consumers who assumed the old validation behavior.**
+
+The latter clause handles the underappreciated case where `additionalProperties: true → false` is breaking for producers who were sending extra fields, but `additionalProperties: false → true` might break consumers who were relying on the fact that extra fields were rejected.
+
+In practice we classify `additionalProperties: false → true` as non-breaking (producers gain flexibility, consumers lose a guarantee they may not have relied on) and flag it in the diff output so teams can make an informed decision.
+
+The full classification table is in the [reference docs](/reference/change-classifications). Here are the decisions that required the most thought:
+
+**Type widening vs narrowing**: `string → number` is breaking (strings are no longer valid). `string → string | number` (adding to a type array, or removing from `anyOf`) is non-breaking. Determining "widening vs narrowing" requires understanding the set of valid values, not just comparing keyword values.
+
+**`format` changes**: JSON Schema's `format` keyword is implementation-defined — validators may or may not enforce it. We treat `format` changes as breaking conservatively. If your validator does enforce formats, removing a `format` constraint would be non-breaking (more values accepted), but adding one would be breaking. Since we can't know which validators you use, we err toward flagging it.
+
+**`default` changes**: Default values are informational in JSON Schema — they're not enforced by validators. Changing a default does not affect which data validates. We classify it as patch. This differs from some other schema systems where defaults are semantically significant.
+
+---
+
+## The hard parts
+
+### Composition keywords
+
+`anyOf`, `oneOf`, `not`, and `if/then/else` are set-theoretic operations. An `anyOf` schema describes the union of the value sets accepted by each sub-schema. Determining whether a change to an `anyOf` is breaking requires computing whether the new union is a subset of the old union — which in the general case requires deciding schema equivalence, a problem that is undecidable.
+
+Our first approach was to try to diff each sub-schema position by position. Given:
+
+```json
+// old
+"anyOf": [
+  { "type": "string" },
+  { "type": "number" }
+]
+
+// new
+"anyOf": [
+  { "type": "string" }
+]
+```
+
+It's tempting to say "the second item was removed, that's breaking." But what if the schemas were reordered? What if the removed sub-schema was redundant (already covered by another)? What if a sub-schema was split into two more specific ones?
+
+Position-based comparison is wrong. Semantic comparison requires SAT solving or something equivalent.
+
+We settled on flagging all composition changes as **Unknown** and requiring human review. This is the correct conservative behavior: we tell you something changed, we tell you where, and we decline to classify it incorrectly.
+
+```
+$ contractual breaking
+
+  order-schema  1 unknown change requires review
+
+  UNKNOWN  order-schema: properties.payment.anyOf — composition changed
+           Cannot determine if this is breaking. Review manually.
+           Path: $.properties.payment.anyOf
+```
+
+Unknown classifications appear in the PR comment and generate a `major` changeset entry by default. The developer can edit the changeset to downgrade to `minor` or `patch` after reviewing.
+
+<Aside type="caution">
+If your schemas rely heavily on `anyOf` or `oneOf`, you will get more Unknown classifications than teams using straightforward object schemas. We recommend restructuring to use `oneOf` with a discriminator property where possible — it's both easier for tooling to reason about and more explicit for humans reading the schema.
+</Aside>
+
+### Draft differences
+
+JSON Schema has had multiple drafts: Draft-04, Draft-06, Draft-07, 2019-09, 2020-12. Some keywords changed behavior between drafts, and some were removed or replaced.
+
+The most significant compatibility issue is `exclusiveMinimum` and `exclusiveMaximum`:
+
+```json
+// Draft-04: boolean flag
+{
+  "minimum": 0,
+  "exclusiveMinimum": true
+}
+
+// Draft-07+: numeric value
+{
+  "exclusiveMinimum": 0
+}
+```
+
+Both express the same constraint, but the structure is completely different. A naive differ that compares keyword values would flag this as a change.
+
+We detect the draft version from the `$schema` keyword and normalize draft-04 exclusive min/max into draft-07+ form before diffing. This means:
+- Draft-04 → Draft-07+ migrations that change `exclusiveMinimum` from boolean to numeric produce zero diff if the semantic meaning is the same
+- Changing from `{ minimum: 0, exclusiveMinimum: true }` to `{ exclusiveMinimum: 1 }` still produces a diff because the constraint value changed
+
+We target Draft-07 as the primary dialect. Draft 2019-09 and 2020-12 are partially supported. The main gaps are `unevaluatedProperties`, `unevaluatedItems`, and the updated `$vocabulary` system, which require more complex resolution logic than we have currently implemented. Unknown keywords in an unrecognized draft are ignored (not flagged as breaking), which is the safe default — we'd rather produce false negatives on unrecognized keywords than false positives.
+
+### allOf merging
+
+`allOf` means "the value must be valid against all of these sub-schemas simultaneously." It's frequently used for extension patterns:
+
+```json
+{
+  "allOf": [
+    { "$ref": "#/$defs/BaseOrder" },
+    {
+      "properties": {
+        "express": { "type": "boolean" }
+      }
+    }
+  ]
+}
+```
+
+Because `allOf` is an intersection, it can be merged into a single schema before diffing. We merge `allOf` entries by:
+1. Merging `properties` objects (union of all property definitions)
+2. Merging `required` arrays (union of all required fields)
+3. Merging constraints (taking the strictest value — highest minLength, lowest maxLength, etc.)
+
+This means that adding a `required` field inside a new `allOf` entry is treated as adding a required field to the schema — breaking. This is correct: if you add to an `allOf`, the intersection gets stricter.
+
+---
+
+## What we got wrong initially
+
+**First attempt: line-by-line diff then classify**
+
+Our first prototype diffed the JSON as strings, parsed the unified diff, and tried to classify each changed line. This was wrong in every interesting case:
+- Whitespace-only changes produced classifications
+- Reordered properties with identical content produced changes
+- Moving a `$ref` inline produced a large spurious diff
+- The "classification" was applied to individual lines, not to semantic changes
+
+We threw this away after a week.
+
+**Second attempt: key-by-key comparison without normalization**
+
+The second version compared schema objects key by key without resolving `$ref` or normalizing `allOf`. It found real changes but missed changes to referenced definitions and produced incorrect classifications for schemas using `allOf` for extension.
+
+The insight we were missing: **normalization must happen before diffing, not during it.** Resolve all refs, merge all `allOf`, and flatten the schema into its canonical form. Then diff the canonical forms. The diff is then purely about value comparison, not about structure navigation.
+
+**Third attempt: normalization first, then diff**
+
+This is the current implementation. Normalization is expensive (it allocates a fully-inlined copy of both schemas), but correctness matters more than memory efficiency for a CI tool running once per PR.
+
+The remaining known gap is composition keyword semantics, documented above. We chose correct-with-gaps over incorrect-and-complete.
+
+---
+
+## Performance characteristics
+
+For typical API schemas (dozens to low hundreds of properties, `$ref` graphs up to a few hundred nodes), the differ runs in under 100ms. Schemas with thousands of properties or deeply recursive `$ref` graphs take longer.
+
+The main cost is `$ref` resolution, which is O(n) in the number of references. The tree walk is O(n) in the number of schema nodes. Composition keyword normalization is the expensive case — merging large `allOf` arrays with overlapping properties requires careful deduplication.
+
+We have not optimized for schemas generated from very large TypeScript types (where TypeBox or zod's `toJsonSchema()` can produce schemas with hundreds of properties and deep nesting). If you're running `contractual breaking` on a schema like that and finding it slow, open an issue.
+
+---
+
+## Relationship to GSoC #984
+
+The JSON Schema organization's GSoC 2026 project ([#984: JSON Schema Compatibility Checker](https://github.com/json-schema-org/community/issues/984)) aims to build official compatibility tooling for the JSON Schema ecosystem. The scope is similar to what we've built: detect breaking changes between two schema versions, classify them.
+
+We built Contractual's differ independently. If an official JSON Schema compatibility library ships with a stable API, we will evaluate adopting it as a dependency and deprecating our built-in implementation. Having first-party support from the JSON Schema organization would be a strict improvement.
+
+In the meantime, if you're working on that GSoC project or have opinions on the classification rules, we'd welcome collaboration. The classification table in the [reference docs](/reference/change-classifications) represents our current understanding of the correct rules. We don't claim it's perfect.
+
+---
+
+## Further reading
+
+- [Breaking Change Detection concept page](/concepts/breaking-changes) — the full classification rule set
+- [Change Classifications reference](/reference/change-classifications) — complete table with examples
+- [GSoC #984: JSON Schema Compatibility Checker](https://github.com/json-schema-org/community/issues/984) — related work from the JSON Schema organization
+- [getsentry/json-schema-diff](https://github.com/getsentry/json-schema-diff) — the most complete prior open-source implementation
+- [JSON Schema specification](https://json-schema.org/specification) — the source of truth for keyword semantics

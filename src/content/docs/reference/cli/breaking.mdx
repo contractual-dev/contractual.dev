@@ -1,0 +1,129 @@
+---
+title: contractual breaking
+description: Compare current contract specs against the last versioned snapshot and report breaking changes.
+---
+
+import { Code } from '@astrojs/starlight/components';
+
+Diff your current specs against the last snapshot and classify every change as breaking, non-breaking, or patch-level.
+
+## Usage
+
+```sh
+contractual breaking [--contract <name>] [--format <fmt>] [--base <ref>]
+```
+
+## Description
+
+`contractual breaking` compares the current state of each registered contract against its last versioned snapshot stored in `.contractual/snapshots/`. For each detected change, Contractual classifies it as one of:
+
+- **breaking** — requires a major version bump (e.g. removing a field, changing a type, deleting an endpoint).
+- **non-breaking** — requires a minor version bump (e.g. adding an optional field, adding a new endpoint).
+- **patch** — backward-compatible fix, requires a patch version bump.
+
+The classification rules follow the [Change Classifications](/reference/change-classifications) reference. Contractual uses built-in structural differs for all supported formats. You can supply a custom differ command via `contractual.yaml`.
+
+The command exits with code `1` if any breaking changes are found, making it straightforward to fail a CI check and block a merge.
+
+You can target a specific git ref or snapshot tag with `--base` to compare against a point other than the latest snapshot.
+
+## Options
+
+| Flag | Description | Default |
+|---|---|---|
+| `--contract <name>` | Run the diff only for the named contract. Repeat to target multiple contracts. | All contracts |
+| `--format <fmt>` | Output format. One of `text`, `json`. | `text` |
+| `--base <ref>` | Snapshot tag or git ref to use as the comparison base. | Latest versioned snapshot |
+
+## Examples
+
+### Check all contracts for breaking changes
+
+<Code code={`$ contractual breaking
+
+Comparing contracts against last snapshot...
+
+  payments-api  (openapi)
+  ✖  [breaking]      DELETE /v1/charges/{id}  Endpoint removed
+  ✖  [breaking]      GET /v1/charges          Response field \`currency\` removed
+  ✔  [non-breaking]  GET /v1/charges          Response field \`metadata\` added
+
+  user-schema  (json-schema)
+  ✔  No changes detected.
+
+2 breaking change(s) found across 1 contract(s).`} lang="ansi" title="Terminal" />
+
+### Check a single contract
+
+<Code code={`$ contractual breaking --contract payments-api
+
+Comparing payments-api against last snapshot...
+
+  ✖  [breaking]      DELETE /v1/charges/{id}  Endpoint removed
+  ✖  [breaking]      GET /v1/charges          Response field \`currency\` removed
+  ✔  [non-breaking]  GET /v1/charges          Response field \`metadata\` added
+
+2 breaking change(s) found.`} lang="ansi" title="Terminal" />
+
+### Compare against a specific base ref
+
+<Code code={`$ contractual breaking --base v1.2.0
+
+Comparing contracts against snapshot v1.2.0...
+
+  payments-api  (openapi)
+  ✖  [breaking]  GET /v1/charges  Response field \`currency\` removed
+
+1 breaking change(s) found.`} lang="ansi" title="Terminal" />
+
+### JSON output for CI integration
+
+<Code code={`$ contractual breaking --format json
+{
+  "contracts": [
+    {
+      "name": "payments-api",
+      "type": "openapi",
+      "changes": [
+        {
+          "classification": "breaking",
+          "description": "Endpoint removed",
+          "location": "DELETE /v1/charges/{id}"
+        },
+        {
+          "classification": "breaking",
+          "description": "Response field \`currency\` removed",
+          "location": "GET /v1/charges"
+        },
+        {
+          "classification": "non-breaking",
+          "description": "Response field \`metadata\` added",
+          "location": "GET /v1/charges"
+        }
+      ]
+    },
+    {
+      "name": "user-schema",
+      "type": "json-schema",
+      "changes": []
+    }
+  ],
+  "summary": { "breaking": 2, "nonBreaking": 1, "patch": 0 }
+}`} lang="json" title="Terminal" />
+
+## Exit Codes
+
+| Code | Meaning |
+|---|---|
+| `0` | No breaking changes detected. |
+| `1` | One or more breaking changes were found. |
+| `2` | Configuration error — e.g. `contractual.yaml` not found, unknown contract name, or snapshot not found for the requested `--base`. |
+| `3` | Tool error — the configured differ binary was not found or exited unexpectedly. |
+
+## See Also
+
+- [Change Classifications](/reference/change-classifications) — full list of what counts as breaking, non-breaking, or patch.
+- [Breaking Change Detection](/concepts/breaking-changes) — concept guide explaining how the differ works.
+- [`contractual changeset`](/reference/cli/changeset) — generate a changeset after reviewing breaking changes.
+- [Custom Linters and Differs](/guides/custom-governance) — supply your own differ command.
+- [Exit Codes](/reference/exit-codes) — full table of exit codes across all commands.

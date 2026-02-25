@@ -1,0 +1,5 @@
+/* Global styles for the entire site */
+@import "./custom.css";
+
+/* Tailwind base styles */
+@import "tailwindcss";

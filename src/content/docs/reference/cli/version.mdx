@@ -1,0 +1,108 @@
+---
+title: contractual version
+description: Consume pending changesets, bump contract versions, snapshot specs, and update changelogs.
+---
+
+import { Code } from '@astrojs/starlight/components';
+
+Apply all pending changesets to produce a new versioned release: bump versions, snapshot specs, and generate changelogs.
+
+## Usage
+
+```sh
+contractual version [--dry-run]
+```
+
+## Description
+
+`contractual version` is the release command. It reads every changeset file in `.contractual/changesets/`, flattens their bump types (highest wins per contract), then performs the following steps atomically:
+
+1. **Resolve bump types.** For each contract, the highest bump across all pending changesets wins: `major` > `minor` > `patch`.
+2. **Update versions.** Writes new version numbers to `.contractual/versions.json`.
+3. **Snapshot specs.** Copies the current state of each spec into `.contractual/snapshots/` tagged with the new version.
+4. **Generate changelog.** Appends a new entry to `CHANGELOG.md` at the project root, grouped by contract and bump type.
+5. **Delete consumed changesets.** Removes the processed files from `.contractual/changesets/`.
+
+After `version` completes, you commit the resulting changes (`contractual.yaml`, `versions.json`, `CHANGELOG.md`, snapshots, and the removal of changeset files) as your release commit.
+
+Use `--dry-run` to preview what would happen without writing anything to disk. This is useful in CI to validate that pending changesets are self-consistent before merging to the release branch.
+
+## Options
+
+| Flag | Description | Default |
+|---|---|---|
+| `--dry-run` | Compute and display the version bump plan without writing any files. | Off |
+
+## Examples
+
+### Apply all pending changesets
+
+<Code code={`$ contractual version
+
+Reading changesets...
+  2024-02-17-payments-api-remove-charges-delete.md  →  payments-api  major
+  2024-02-10-user-schema-add-phone.md               →  user-schema   minor
+
+Resolved bump types:
+  payments-api   1.4.2  →  2.0.0  (major)
+  user-schema    0.9.1  →  0.10.0 (minor)
+
+Snapshotting specs...
+  ✔  .contractual/snapshots/payments-api@2.0.0.yaml
+  ✔  .contractual/snapshots/user-schema@0.10.0.json
+
+Updated .contractual/versions.json
+Updated CHANGELOG.md
+Deleted 2 changeset file(s)
+
+Done. Commit these changes to complete the release.`} lang="ansi" title="Terminal" />
+
+### Dry run to preview changes
+
+<Code code={`$ contractual version --dry-run
+
+[dry-run] Reading changesets...
+  2024-02-17-payments-api-remove-charges-delete.md  →  payments-api  major
+  2024-02-10-user-schema-add-phone.md               →  user-schema   minor
+
+[dry-run] Resolved bump types:
+  payments-api   1.4.2  →  2.0.0  (major)
+  user-schema    0.9.1  →  0.10.0 (minor)
+
+[dry-run] No files were written.`} lang="ansi" title="Terminal" />
+
+### Generated CHANGELOG entry
+
+`contractual version` appends a structured entry to `CHANGELOG.md`:
+
+<Code code={`## 2024-02-17
+
+### payments-api — 2.0.0 (major)
+
+- Remove deprecated \`DELETE /v1/charges/{id}\` endpoint and add metadata field to charge responses.
+
+### user-schema — 0.10.0 (minor)
+
+- Add optional \`phone\` property to user schema.`} lang="markdown" title="CHANGELOG.md" />
+
+### Updated versions.json
+
+<Code code={`{
+  "payments-api": "2.0.0",
+  "user-schema": "0.10.0"
+}`} lang="json" title=".contractual/versions.json" />
+
+## Exit Codes
+
+| Code | Meaning |
+|---|---|
+| `0` | Versions bumped and all output files written successfully (or `--dry-run` completed). |
+| `2` | Configuration error — e.g. `contractual.yaml` not found, malformed changeset file, or no changesets found to consume. |
+
+## See Also
+
+- [Managing Versions](/guides/versioning) — end-to-end guide for the full versioning workflow.
+- [The Changeset Model](/concepts/changesets) — how changesets accumulate and get flattened.
+- [`contractual changeset`](/reference/cli/changeset) — create changeset files before running `version`.
+- [`contractual status`](/reference/cli/status) — preview pending changesets and projected bumps without applying them.
+- [Changeset File Format](/reference/changeset-format) — the schema consumed by `version`.

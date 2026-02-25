@@ -1,0 +1,277 @@
+---
+title: "Quick Start: CLI"
+description: Go from zero to a working contractual breaking command in 5 minutes using the Contractual CLI.
+---
+
+import { Aside, Steps, Tabs, TabItem, LinkCard } from '@astrojs/starlight/components';
+
+This guide takes you from a blank directory to a fully working Contractual setup with lint, breaking change detection, a versioned changeset, and a bumped contract version. Estimated time: 5 minutes.
+
+<Aside type="note">
+Make sure you have the CLI installed before starting. See [Installation](/getting-started/installation) if you haven't done that yet.
+</Aside>
+
+## Step 1: Create a spec file
+
+Create a directory for your project and add a JSON Schema file. This is the contract Contractual will manage.
+
+```bash
+mkdir my-project && cd my-project
+```
+
+Create `schemas/order.schema.json`:
+
+```json
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://example.com/order.schema.json",
+  "title": "Order",
+  "description": "A customer order",
+  "type": "object",
+  "required": ["id", "status", "amount"],
+  "properties": {
+    "id": {
+      "type": "string",
+      "description": "Unique order identifier"
+    },
+    "status": {
+      "type": "string",
+      "enum": ["pending", "confirmed", "shipped", "delivered"],
+      "description": "Current order status"
+    },
+    "amount": {
+      "type": "string",
+      "description": "Order total as a formatted string, e.g. '12.50'"
+    },
+    "customer_id": {
+      "type": "string",
+      "description": "ID of the customer who placed the order"
+    }
+  },
+  "additionalProperties": false
+}
+```
+
+```bash
+mkdir schemas
+# paste the JSON above into schemas/order.schema.json
+```
+
+## Step 2: Initialize Contractual
+
+Run `contractual init` from the root of your project. It scans for recognizable spec files and scaffolds the configuration.
+
+```bash
+contractual init
+```
+
+Expected output:
+
+```
+Scanning for contracts...
+
+  Found schemas/order.schema.json  → JSON Schema
+
+Scaffolding contractual.yaml...   done
+Scaffolding .contractual/         done
+
+  .contractual/snapshots/   versioned snapshots will live here
+  .contractual/changesets/  pending changesets will live here
+  .contractual/versions.json
+
+Run `contractual lint` to validate your contracts.
+```
+
+This creates two things:
+
+- `contractual.yaml` — your configuration file
+- `.contractual/` — the state directory that tracks versions, snapshots, and pending changesets
+
+Open `contractual.yaml` to see what was generated:
+
+```yaml
+# yaml-language-server: $schema=https://contractual.dev/schema.json
+contracts:
+  - name: order-schema
+    type: json-schema
+    spec: schemas/order.schema.json
+```
+
+<Aside type="tip">
+Add `.contractual/changesets/` to `.gitignore` if you don't want auto-generated changesets committed to your repository. Add `.contractual/snapshots/` and `.contractual/versions.json` to version control — they are the source of truth for your contract history.
+</Aside>
+
+## Step 3: Run lint
+
+Validate your contract against the JSON Schema meta-schema.
+
+```bash
+contractual lint
+```
+
+Expected output:
+
+```
+Linting contracts...
+
+  ✓ order-schema   schemas/order.schema.json
+
+All contracts passed lint.
+```
+
+If your schema has structural problems — unknown keywords, invalid types, malformed `$ref` — lint will report them here before you ever run a diff.
+
+## Step 4: Make a breaking change
+
+Edit `schemas/order.schema.json` to change the type of the `amount` field from `string` to `number`. This simulates the kind of accidental breaking change Contractual is designed to catch.
+
+Find this section:
+
+```json
+"amount": {
+  "type": "string",
+  "description": "Order total as a formatted string, e.g. '12.50'"
+},
+```
+
+Change it to:
+
+```json
+"amount": {
+  "type": "number",
+  "description": "Order total as a numeric value, e.g. 12.50"
+},
+```
+
+Save the file.
+
+## Step 5: Detect the breaking change
+
+```bash
+contractual breaking
+```
+
+Expected output:
+
+```
+Checking for breaking changes...
+
+  ✗ order-schema   schemas/order.schema.json
+
+    BREAKING  /properties/amount/type
+              Changed type: string → number
+              Consumers expecting a string value will fail to validate.
+
+1 breaking change detected.
+Exit code: 1
+```
+
+Contractual compares the current schema against the snapshot it saved during `init` (the baseline). It classifies the type change from `string` to `number` as breaking because existing consumers that expect a string value will now fail validation.
+
+<Aside type="caution">
+`contractual breaking` exits with code `1` when breaking changes are detected. This means it will fail a CI step by default, which is exactly what you want for a required PR check.
+</Aside>
+
+## Step 6: Create a changeset
+
+A changeset is a small markdown file that declares what changed and at what semver level. Contractual auto-generates one from its diff analysis.
+
+```bash
+contractual changeset --no-interactive
+```
+
+Expected output:
+
+```
+Generating changeset...
+
+  order-schema  MAJOR  (breaking change detected)
+
+Created .contractual/changesets/lucky-tiger-runs.md
+
+Review and edit the changeset before committing it.
+```
+
+Open `.contractual/changesets/lucky-tiger-runs.md` to see what was created:
+
+```md
+---
+"order-schema": major
+---
+
+Changed type of `amount` field from `string` to `number`.
+
+Consumers that pass string values for `amount` must be updated to pass numeric values instead.
+```
+
+The frontmatter declares the bump level (`major`) per contract. The body is the human-readable description that will appear in the CHANGELOG. You can edit both before committing.
+
+<Aside type="note">
+Without `--no-interactive`, `contractual changeset` opens an interactive prompt where you can confirm or override the auto-detected bump level and write your own description. Use `--no-interactive` in CI.
+</Aside>
+
+## Step 7: Bump the version
+
+Once you're satisfied with the changeset, run `contractual version` to consume it.
+
+```bash
+contractual version
+```
+
+Expected output:
+
+```
+Consuming changesets...
+
+  order-schema
+    0.0.0 → 1.0.0  (major bump from lucky-tiger-runs.md)
+
+Updated .contractual/versions.json
+Updated .contractual/snapshots/order-schema/1.0.0.json
+Deleted  .contractual/changesets/lucky-tiger-runs.md
+Updated  schemas/CHANGELOG.md
+
+Done. Commit the changes and push.
+```
+
+Contractual has:
+
+1. Bumped `order-schema` from `0.0.0` to `1.0.0`
+2. Saved a new snapshot of the schema at the new version
+3. Deleted the consumed changeset file
+4. Appended an entry to `schemas/CHANGELOG.md`
+
+Check `schemas/CHANGELOG.md`:
+
+```md
+# Changelog
+
+## 1.0.0 — 2026-02-17
+
+### Breaking Changes
+
+- Changed type of `amount` field from `string` to `number`.
+  Consumers that pass string values for `amount` must be updated to pass numeric values instead.
+```
+
+That is the full CLI workflow. You now have a versioned contract with an auditable history.
+
+## Next steps
+
+<LinkCard
+  title="Quick Start: GitHub Action"
+  description="Add breaking change detection to every pull request in 5 minutes."
+  href="/getting-started/quickstart-action"
+/>
+
+<LinkCard
+  title="Configuration"
+  description="Add multiple contracts, custom linters, OpenAPI support, and more."
+  href="/guides/configuration"
+/>
+
+<LinkCard
+  title="Managing Versions"
+  description="Deep dive into the .contractual/ directory, snapshots, and the full versioning lifecycle."
+  href="/guides/versioning"
+/>

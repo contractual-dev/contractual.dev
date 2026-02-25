@@ -1,0 +1,258 @@
+---
+title: GitHub Action
+description: Complete reference for the Contractual GitHub Action — inputs, outputs, permissions, and workflow examples.
+---
+
+import { Aside, Code, Tabs, TabItem } from '@astrojs/starlight/components';
+
+The Contractual GitHub Action runs lint, breaking change detection, changeset generation, and version management directly in your GitHub workflows. It operates in two modes: `pr-check` for pull request validation, and `release` for publishing versioned contracts.
+
+## Installation
+
+```yaml
+- uses: contractual-dev/contractual@v1
+```
+
+Pin to a specific version for reproducible builds:
+
+```yaml
+- uses: contractual-dev/contractual@v1.2.3
+```
+
+## Inputs
+
+| Input | Description | Required | Default |
+|-------|-------------|----------|---------|
+| `mode` | Action mode: `pr-check` or `release` | Yes | — |
+| `anthropic-api-key` | Anthropic API key for AI-powered change explanations and changelog enrichment | No | — |
+| `github-token` | GitHub token for PR comments, changeset commits, and Version Contracts PR creation | No | `${{ github.token }}` |
+| `fail-on-breaking` | Exit with code 1 if breaking changes are detected | No | `true` |
+| `auto-changeset` | Auto-generate and commit a changeset file when spec changes are detected but no changeset exists | No | `true` |
+| `version-pr-title` | Title for the Version Contracts pull request (release mode) | No | `Version Contracts` |
+| `version-pr-branch` | Branch name for the Version Contracts pull request (release mode) | No | `contractual/version-contracts` |
+
+## Outputs
+
+| Output | Description | Available in |
+|--------|-------------|--------------|
+| `has-breaking` | `'true'` if breaking changes were detected, `'false'` otherwise | `pr-check` |
+| `has-changes` | `'true'` if any spec changes were detected | `pr-check` |
+| `changeset-created` | `'true'` if a changeset was auto-generated and committed | `pr-check` |
+| `version-pr-url` | URL of the created or updated Version Contracts pull request | `release` |
+
+## Permissions
+
+The action requires these permissions to operate. Set them at the workflow or job level.
+
+| Permission | Level | Purpose |
+|------------|-------|---------|
+| `contents` | `write` | Commit auto-generated changesets to the PR branch; push version bumps and snapshots in release mode |
+| `pull-requests` | `write` | Post PR comments with change summaries; create the Version Contracts PR |
+| `issues` | `write` | Required by the GitHub API when creating PR comments via `octokit` |
+
+<Aside type="caution">
+Forked pull requests receive read-only tokens by default. The action cannot commit changesets or post comments on PRs from forks. Consider using a `pull_request_target` trigger with caution, or document that fork contributors must create changesets manually.
+</Aside>
+
+## Mode: pr-check
+
+In `pr-check` mode the action:
+
+1. Runs `contractual lint` across all contracts
+2. Runs `contractual breaking` to detect structural changes against the last snapshot
+3. Posts a summary table as a PR comment (updates the comment on subsequent pushes)
+4. If spec changes are found and no changeset exists, generates one and commits it to the PR branch (when `auto-changeset: true`)
+5. Fails the check if breaking changes are present and `fail-on-breaking: true`
+
+### Workflow
+
+```yaml
+# .github/workflows/contractual-pr.yml
+name: Contract Check
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: write        # commit auto-generated changeset
+  pull-requests: write   # post PR comment
+  issues: write          # required by GitHub API for PR comments
+
+jobs:
+  contract-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Fetch full history so the action can diff against the base branch
+          fetch-depth: 0
+          # Check out the PR branch, not the merge commit
+          ref: ${{ github.head_ref }}
+
+      - uses: contractual-dev/contractual@v1
+        with:
+          mode: pr-check
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          # Optional: enable AI change explanations
+          anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
+```
+
+<Aside type="note">
+The `fetch-depth: 0` option is required. The action compares spec files against the base branch, which requires access to the full git history.
+</Aside>
+
+## Mode: release
+
+In `release` mode the action:
+
+1. Checks whether unconsumed changesets exist in `.contractual/changesets/`
+2. If changesets are present, runs `contractual version` to bump versions, update snapshots, and generate changelogs
+3. Creates or updates a "Version Contracts" pull request with all version changes
+4. Outputs the `version-pr-url` for use in downstream steps
+
+This mode is designed to run on pushes to the default branch after a spec-change PR merges.
+
+### Workflow
+
+```yaml
+# .github/workflows/contractual-release.yml
+name: Version Contracts
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write        # push version bump commits
+  pull-requests: write   # create Version Contracts PR
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: contractual-dev/contractual@v1
+        id: release
+        with:
+          mode: release
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      # Optional: notify Slack when a Version Contracts PR is opened
+      - name: Notify on new version PR
+        if: steps.release.outputs.version-pr-url != ''
+        run: |
+          echo "Version PR created: ${{ steps.release.outputs.version-pr-url }}"
+```
+
+## Environment Variables
+
+The action reads these environment variables in addition to its inputs.
+
+| Variable | Description |
+|----------|-------------|
+| `ANTHROPIC_API_KEY` | Alternative to the `anthropic-api-key` input. If both are set, the input takes precedence. |
+| `GITHUB_TOKEN` | Set automatically by GitHub Actions. Used as the default for `github-token`. |
+
+## Examples
+
+### Minimal PR check
+
+The smallest viable configuration — no AI, default fail behavior.
+
+```yaml
+- uses: contractual-dev/contractual@v1
+  with:
+    mode: pr-check
+```
+
+### With AI explanations
+
+Add `anthropic-api-key` to enable LLM-generated change explanations in PR comments and enriched changelog entries.
+
+```yaml
+- uses: contractual-dev/contractual@v1
+  with:
+    mode: pr-check
+    anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
+```
+
+### Custom fail behavior
+
+Detect breaking changes but never fail the CI check — useful during a migration period.
+
+```yaml
+- uses: contractual-dev/contractual@v1
+  with:
+    mode: pr-check
+    fail-on-breaking: false
+```
+
+Read the output in a subsequent step to make a conditional decision:
+
+```yaml
+- uses: contractual-dev/contractual@v1
+  id: check
+  with:
+    mode: pr-check
+    fail-on-breaking: false
+
+- name: Warn on breaking changes
+  if: steps.check.outputs.has-breaking == 'true'
+  run: echo "::warning::Breaking changes detected — review required before merge"
+```
+
+### Monorepo with path filtering
+
+In a monorepo, trigger the contract check only when spec files change.
+
+```yaml
+on:
+  pull_request:
+    paths:
+      - 'specs/**'
+      - 'schemas/**'
+      - 'contractual.yaml'
+```
+
+Combine with per-service path filtering if your monorepo has multiple `contractual.yaml` files in subdirectories:
+
+```yaml
+jobs:
+  orders-contracts:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: contractual-dev/contractual@v1
+        with:
+          mode: pr-check
+        env:
+          # Point to the service-level config
+          CONTRACTUAL_CONFIG: ./services/orders/contractual.yaml
+```
+
+### Release with post-publish hook
+
+After the Version Contracts PR is created, trigger additional automation.
+
+```yaml
+- uses: contractual-dev/contractual@v1
+  id: release
+  with:
+    mode: release
+    version-pr-title: 'chore: version contracts'
+    version-pr-branch: 'releases/contracts'
+
+- name: Trigger downstream publish
+  if: steps.release.outputs.version-pr-url != ''
+  uses: actions/github-script@v7
+  with:
+    script: |
+      console.log('Version PR:', '${{ steps.release.outputs.version-pr-url }}');
+      // Add reviewers, labels, or trigger notifications here
+```

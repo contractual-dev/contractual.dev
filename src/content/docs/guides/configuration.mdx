@@ -1,0 +1,235 @@
+---
+title: Configuration
+description: Complete reference for contractual.yaml with progressive examples, field descriptions, and a full annotated config.
+---
+
+import { Tabs, TabItem, Aside, Code } from '@astrojs/starlight/components';
+
+`contractual.yaml` is the single file that tells Contractual which contracts to manage, how to govern them, what to generate, and how to publish. This guide walks through the file progressively — starting minimal and adding fields one section at a time.
+
+<Aside type="tip">
+Add the `$schema` line at the top of every `contractual.yaml`. With the VS Code YAML extension installed, this gives you autocompletion and inline validation for every field.
+</Aside>
+
+## Minimal config
+
+The only required section is `contracts`. Each entry needs three fields: `name`, `type`, and `spec`.
+
+```yaml
+# yaml-language-server: $schema=https://contractual.dev/schema.json
+
+contracts:
+  - name: orders-api
+    type: openapi
+    spec: ./specs/orders.openapi.yaml
+
+  - name: order-schema
+    type: json-schema
+    spec: ./schemas/order.schema.json
+```
+
+| Field | Description |
+|---|---|
+| `name` | Unique slug for this contract. Used in changeset files, changelogs, CLI output, and PR comments. Lowercase, hyphens only. |
+| `type` | Format: `openapi`, `json-schema`, `asyncapi`, or `odcs`. Controls which default linter and differ are used. |
+| `spec` | Path to the spec file, relative to `contractual.yaml`. Glob patterns are not supported — one path per contract. |
+
+With just this config, `contractual lint` and `contractual breaking` both work using built-in defaults for each format.
+
+## Adding governance overrides
+
+By default, Contractual uses a built-in linter and differ per contract type. Override either — or both — at the contract level using `lint` and `breaking`.
+
+```yaml
+# yaml-language-server: $schema=https://contractual.dev/schema.json
+
+contracts:
+  - name: orders-api
+    type: openapi
+    spec: ./specs/orders.openapi.yaml
+    lint: "spectral lint {spec} --format json"
+    breaking: "my-custom-differ breaking {old} {new} --format json"
+
+  - name: order-schema
+    type: json-schema
+    spec: ./schemas/order.schema.json
+    lint: false
+```
+
+- `lint: "..."` — custom shell command to run for lint validation. Use `{spec}` as a placeholder for the spec file path.
+- `breaking: "..."` — custom shell command for breaking change detection. Use `{old}` and `{new}` as placeholders.
+- `lint: false` — disable linting for this contract entirely.
+- `breaking: false` — disable breaking change detection for this contract.
+
+See [Custom Linters & Differs](/guides/custom-governance) for placeholder reference, output format expectations, and more examples.
+
+## Adding outputs
+
+The `outputs` section runs code generation commands after a successful lint. Use this to generate TypeScript clients, validation libraries, or any artifact that derives from your spec.
+
+```yaml
+# yaml-language-server: $schema=https://contractual.dev/schema.json
+
+contracts:
+  - name: orders-api
+    type: openapi
+    spec: ./specs/orders.openapi.yaml
+    outputs:
+      - name: typescript-client
+        command: "orval --input {spec} --output ./src/generated/orders-client.ts"
+      - name: zod-schemas
+        command: "openapi-zod-client {spec} -o ./src/generated/orders-schemas.ts"
+
+  - name: order-schema
+    type: json-schema
+    spec: ./schemas/order.schema.json
+    outputs:
+      - name: validator
+        command: "ajv compile -s {spec} -o ./dist/validators/order.js"
+```
+
+Each output entry takes:
+
+| Field | Description |
+|---|---|
+| `name` | Label for the output, shown in CLI output. |
+| `command` | Shell command to run. Use `{spec}` for the spec path, `{name}` for the contract name, `{version}` for the current version. |
+
+<Aside type="note">
+Outputs run during `contractual lint` after lint validation passes. They do not run if lint fails.
+</Aside>
+
+## Adding publish
+
+The `publish` section controls what happens when `contractual version` runs — after versions are bumped and changelogs are written.
+
+```yaml
+# yaml-language-server: $schema=https://contractual.dev/schema.json
+
+contracts:
+  - name: orders-api
+    type: openapi
+    spec: ./specs/orders.openapi.yaml
+
+publish:
+  commit: true
+  tag: true
+  release: true
+  releaseCommand: "gh release create v{version} --notes-file CHANGELOG.md"
+```
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `commit` | `boolean` | `true` | Commit the version bump and changelog update. |
+| `tag` | `boolean` | `true` | Create a git tag `v{version}` after commit. |
+| `release` | `boolean` | `false` | Run `releaseCommand` after tagging. |
+| `releaseCommand` | `string` | — | Shell command for publishing. Available placeholders: `{version}`, `{name}`. |
+
+<Aside type="caution">
+`contractual version` does not push to remote. Add a `git push --follow-tags` step after it in your CI workflow, or use the GitHub Action release mode which handles this automatically.
+</Aside>
+
+## AI configuration
+
+AI features are optional. When an `ANTHROPIC_API_KEY` environment variable is set, Contractual uses Claude to enrich changelogs, explain changes in PR comments, and suggest spec improvements.
+
+```yaml
+# yaml-language-server: $schema=https://contractual.dev/schema.json
+
+contracts:
+  - name: orders-api
+    type: openapi
+    spec: ./specs/orders.openapi.yaml
+
+ai:
+  changelog: true
+  explain: true
+  enhance: false
+```
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `changelog` | `boolean` | `false` | Use AI to write human-friendly changelog entries from detected changes. |
+| `explain` | `boolean` | `false` | Add an AI explanation section to PR comments. |
+| `enhance` | `boolean` | `false` | Suggest spec improvements (descriptions, examples) as a PR review comment. |
+
+All AI features degrade gracefully — if `ANTHROPIC_API_KEY` is absent, Contractual skips AI steps without failing. See [AI-Powered Features](/guides/ai-features) for setup, cost estimates, and privacy details.
+
+## Full annotated example
+
+This is every supported field in one file, with inline comments explaining each one.
+
+```yaml
+# yaml-language-server: $schema=https://contractual.dev/schema.json
+
+# contracts: required. One entry per spec file you want Contractual to manage.
+contracts:
+  - name: orders-api                          # Unique slug. Used in changesets, changelog, CLI output.
+    type: openapi                             # Format: openapi | json-schema | asyncapi | odcs
+    spec: ./specs/orders.openapi.yaml         # Path to the spec file, relative to this config.
+
+    # lint: optional. Overrides the default linter for this contract.
+    # Set to false to disable linting. {spec} is replaced with the spec path at runtime.
+    lint: "spectral lint {spec} --format json"
+
+    # breaking: optional. Overrides the default breaking change detector.
+    # {old} = snapshot path, {new} = current spec path.
+    breaking: "my-custom-differ breaking {old} {new} --format json"
+
+    # outputs: optional. Commands to run after lint passes.
+    # Run in order. Any failure stops the sequence and reports an error.
+    outputs:
+      - name: typescript-client
+        # {spec} = spec path, {name} = contract name, {version} = current semver version
+        command: "orval --input {spec} --output ./src/generated/orders-client.ts"
+      - name: docs
+        command: "redocly build-docs {spec} -o ./docs/orders-api.html"
+
+  - name: order-schema
+    type: json-schema
+    spec: ./schemas/order.schema.json
+    lint: false                               # Disable lint for this contract only.
+
+  - name: events
+    type: asyncapi
+    spec: ./specs/events.asyncapi.yaml
+    # No overrides: uses built-in AsyncAPI linter and differ.
+
+# publish: optional. What to do after contractual version runs.
+publish:
+  commit: true                                # Commit version bumps and changelog. Default: true.
+  tag: true                                   # Create a git tag for the new version. Default: true.
+  release: false                              # Run releaseCommand after tagging. Default: false.
+  releaseCommand: "gh release create v{version} --title 'Release {version}' --notes-file CHANGELOG.md"
+                                              # {version} and {name} are available as placeholders.
+
+# ai: optional. Requires ANTHROPIC_API_KEY environment variable.
+# All features are opt-in and degrade gracefully without the key.
+ai:
+  changelog: true                             # AI-written changelog entries. Default: false.
+  explain: true                               # AI explanation in PR comments. Default: false.
+  enhance: false                              # Spec improvement suggestions. Default: false.
+```
+
+## Defaults table
+
+What Contractual does when each field is omitted:
+
+| Field | Default behavior |
+|---|---|
+| `contracts[].lint` | Uses the built-in linter for the contract's `type`. OpenAPI uses Redocly, JSON Schema uses ajv meta-validation, AsyncAPI uses `@asyncapi/parser`. |
+| `contracts[].breaking` | Uses the built-in differ for the contract's `type`. OpenAPI and JSON Schema use the built-in structural differ. |
+| `contracts[].outputs` | No code generation runs. |
+| `publish.commit` | `true` — changes are committed. |
+| `publish.tag` | `true` — a git tag is created. |
+| `publish.release` | `false` — no release command runs. |
+| `ai.changelog` | `false` — changelog entries are machine-generated without LLM enrichment. |
+| `ai.explain` | `false` — PR comments show the diff table only, no AI explanation. |
+| `ai.enhance` | `false` — no spec improvement suggestions. |
+
+## Next steps
+
+- [Managing Versions](/guides/versioning) — how changesets, snapshots, and `contractual version` work together
+- [GitHub Action Setup](/guides/github-action) — automate lint and versioning in CI
+- [Custom Linters & Differs](/guides/custom-governance) — bring your own tools
+- [Configuration Schema Reference](/reference/configuration) — every field documented with type and constraints

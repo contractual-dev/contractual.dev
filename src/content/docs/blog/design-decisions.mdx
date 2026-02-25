@@ -1,0 +1,148 @@
+---
+title: "Design Decisions in Contractual"
+date: 2025-01-15
+authors:
+  - contractual
+tags:
+  - architecture
+  - design
+excerpt: "Why git-stored history instead of a database. Why YAML config instead of package.json conventions. Why the Changesets model. Honest tradeoffs for each decision."
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+Every tool is a set of bets. You pick an approach, accept its tradeoffs, and live with the consequences when those tradeoffs surface in production. This post documents the biggest bets in Contractual's architecture — what we chose, why we chose it, and what we gave up.
+
+This is written for engineers evaluating the project, not for marketing it. If a tradeoff is real, it's documented here.
+
+---
+
+## Git-stored history instead of a database
+
+Contractual stores contract snapshots in your git repository under `.contractual/snapshots/`. When you run `contractual breaking`, it reads the last released snapshot from the filesystem and compares it to the current spec on disk. Snapshots are plain files — JSON or YAML, matching the format of your spec — committed alongside your code.
+
+We chose this over a hosted snapshot store or a local database (SQLite, etc.).
+
+**Why it works:**
+
+Git is already in every development workflow that Contractual targets. Snapshots gain the full git audit trail for free: who updated a snapshot, when, and in what commit. You can `git log` or `git blame` a snapshot file the same way you can any source file. Offline use works without any additional setup. There is no infrastructure to provision, no service to keep running, and no authentication to configure for CI.
+
+The versioned snapshot is also the foundation of the reproducibility guarantee. If you check out a historical commit, `contractual breaking` compares the spec at that commit against the snapshot at that commit, which gives you the same result it produced at the time. A hosted service could be queried differently depending on what state it's in today.
+
+**The real costs:**
+
+Large OpenAPI specs can be several hundred kilobytes. If your team iterates frequently and releases often, the snapshot directory accumulates significant binary weight in git history. There is no mechanism to prune old snapshots without a `git filter-repo` rewrite, which is disruptive.
+
+Git is also not optional — Contractual has no story for projects not using git. This is a deliberate constraint, not an oversight. If your schema tooling lives outside git, Contractual does not fit.
+
+Teams with strict policies about what can be committed to a repository (some enterprise environments control this tightly) may find the snapshot files raise questions they need to answer with their security or compliance teams.
+
+---
+
+## YAML config instead of package.json conventions
+
+Contractual uses a `contractual.yaml` file at the repository root rather than a `contractual` key in `package.json` or a naming convention like `.contractualrc`.
+
+**Why it works:**
+
+A standalone config file is self-documenting in a way that a `package.json` key is not. New contributors find `contractual.yaml`, open it, and understand the project's schema contracts without context. This matters because schema contracts are often maintained by teams outside the core Node.js team — API design teams, platform teams, data teams — who may not be comfortable navigating a `package.json`.
+
+YAML also supports comments, which `package.json` does not. Inline documentation in a config file reduces the gap between "what the config says" and "why it says that":
+
+```yaml
+contracts:
+  - name: orders-api
+    type: openapi
+    spec: ./specs/orders.openapi.yaml
+    # Use a custom differ for specs with special requirements
+    diff:
+      command: my-custom-differ {old} {new} --format json
+```
+
+Contractual also targets non-JavaScript projects. A Python service publishing an OpenAPI spec should be able to use Contractual without having a `package.json` at all. A standalone YAML config makes this possible.
+
+**The real costs:**
+
+This is another config file to add to repositories that may already have `.eslintrc`, `prettier.config.js`, `tsconfig.json`, `jest.config.js`, and a dozen others. For teams already experiencing config fatigue, `contractual.yaml` is one more thing.
+
+The `package.json` convention also comes with tooling — editors highlight unknown keys, monorepo tools understand the structure, and teams know where to look. A standalone file requires documentation and onboarding to establish the same habits.
+
+If you are using Contractual only for JavaScript packages and are already using Changesets for npm versioning, having two separate systems with two config files adds overhead that a tighter integration could have avoided.
+
+---
+
+## The Changesets model instead of Conventional Commits
+
+Contractual generates changeset files (under `.contractual/changesets/`) rather than relying on commit message parsing. This is a deliberate adoption of the model pioneered by [Changesets](https://github.com/changesets/changesets) for npm packages.
+
+**Why it works:**
+
+Conventional Commits (`feat:`, `fix:`, `BREAKING CHANGE:`) ask the developer to declare the impact of their change at commit time. For schema changes, this is asking them to make a judgment that a tool can make more reliably. A developer who removes a field from a JSON Schema may not know whether that field was marked as required in the published contract. `contractual breaking` knows.
+
+Changeset files are generated after the differ runs, so they reflect what the differ actually found. The developer reviews and annotates the generated file — adding context, correcting a classification if needed — rather than authoring a classification from memory:
+
+```markdown
+---
+"orders-api": major
+"inventory-schema": patch
+---
+
+## orders-api
+
+Removed GET /orders/{id}/details. Consumers using this endpoint must migrate to
+GET /orders/{id}, which now includes the full details payload inline.
+The separate endpoint will be unavailable starting with this release.
+
+## inventory-schema
+
+Updated description on the `sku` field to clarify that dashes are permitted.
+No structural change.
+```
+
+The changeset model also decouples the change from the release. A developer makes a change, generates a changeset, and merges. The release step — consuming all pending changesets, computing the highest version bump per contract, writing the changelog — happens separately, on a schedule the team controls. This supports batching multiple changes into a single release without requiring a dedicated release commit or branch strategy.
+
+**The real costs:**
+
+Changesets are extra files that must be committed alongside every schema change. Teams that forget to generate a changeset before merging will have a version bump without documentation. We provide a CI check that fails if there are schema changes without a corresponding changeset, but that check requires opt-in configuration.
+
+Teams already using Conventional Commits for npm versioning will run two systems in parallel — Changesets for schema contracts and Conventional Commits (or Changesets for npm) for code packages. This is not a conflict, but it is cognitive overhead.
+
+The changeset filenames are randomly generated slugs (`fuzzy-tiger-runs.md`). Some teams find this charming; others find it unprofessional. You can rename the files before committing, but the CLI does not offer a naming convention option today.
+
+Conventional Commits have better tooling support — commit linters, editor integrations, CI plugins. The Contractual changeset format is bespoke, and the tooling ecosystem for it is limited to what Contractual itself ships.
+
+---
+
+## A built-in JSON Schema differ instead of adopting an upstream library
+
+For JSON Schema contracts, Contractual ships its own structural differ rather than delegating to an external library.
+
+**Why it works:**
+
+When we evaluated what existed, nothing was production-quality. [getsentry/json-schema-diff](https://github.com/getsentry/json-schema-diff) — the most complete open-source attempt — documents itself as "best-effort" in its README, does not resolve `$ref`, and has known issues with `anyOf`/`oneOf`. We could not use a best-effort library for a tool where false negatives mean shipping breaking changes undetected.
+
+The second blog post in this series covers the full evaluation and implementation. The short version: the gap was real, no satisfactory library existed, and building one was the only path to correct behavior.
+
+Building the differ in-house also gave us control over the classification rules. Classification is the product. Whether removing a field is `breaking`, whether tightening `minLength` is `breaking`, whether a `format` change is `breaking` — these decisions determine whether Contractual catches real problems or generates noise. Owning the implementation means owning those decisions and being able to iterate on them based on user feedback.
+
+**The real costs:**
+
+Every rule in the differ is a maintenance burden. JSON Schema has roughly 40 keywords with non-trivial semantics. Each keyword requires a correct classification rule, test coverage, and ongoing maintenance as teams find edge cases.
+
+The composition keyword problem (`anyOf`, `oneOf`, `not`) is partially unresolved. Contractual flags composition changes as Unknown and requires human review. This is the correct conservative behavior, but it is a gap — a production-quality differ should eventually classify common composition patterns correctly. We have not solved this yet.
+
+If the JSON Schema organization's [GSoC 2026 project (#984)](https://github.com/json-schema-org/community/issues/984) ships a production-quality compatibility library, we will evaluate adopting it and deprecating the built-in differ. Taking on a permanent maintenance burden to fill a temporary gap is not the goal. The goal is correct breaking change detection for JSON Schema contracts, and if an upstream library can provide that, the built-in implementation becomes unnecessary.
+
+There is also an ecosystem alignment cost. Teams evaluating Contractual for JSON Schema compatibility checking have no independent library they can inspect, benchmark, or trust based on prior reputation. They must trust Contractual's implementation. We publish the classification rules in the [reference docs](/reference/change-classifications) and document the known gaps there. But transparency does not fully substitute for community validation of an independent library.
+
+---
+
+## What these decisions have in common
+
+All of these decisions optimize for the same thing: getting schema breaking change detection into CI with minimal infrastructure and maximum transparency.
+
+Git storage, standalone config, file-based changesets, and built-in structural differs are all expressions of the same philosophy: keep the tool self-contained, make its behavior auditable, and minimize the operational surface area teams need to manage.
+
+The cost of that philosophy is ecosystem friction — binary dependencies, extra files, custom formats, and maintenance burdens that could theoretically be offloaded to upstream projects. Those costs are real. Whether they are acceptable depends on what you are optimizing for.
+
+If you are evaluating Contractual and a specific tradeoff is a blocker for your team, open an issue on [GitHub](https://github.com/contractual-dev/contractual). The architecture is not frozen, and some of these decisions are candidates for revisiting as the ecosystem evolves.

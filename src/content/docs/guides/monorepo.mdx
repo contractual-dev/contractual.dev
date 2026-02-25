@@ -1,0 +1,312 @@
+---
+title: Monorepo Setup
+description: Configure Contractual in a monorepo — multiple services, independent versioning, path-filtered GitHub Actions, and multiple contractual.yaml files.
+---
+
+import { Tabs, TabItem, Aside } from '@astrojs/starlight/components';
+
+Contractual works well in monorepos. Each service or domain area can have its own `contractual.yaml`, its own `.contractual/` directory, and its own independent versioning lifecycle. The GitHub Action's `paths` filter keeps CI efficient — only the services whose specs changed run the check.
+
+## When to use monorepo setup
+
+Use a per-service setup (multiple `contractual.yaml` files) when:
+
+- Services have different release cadences
+- Different teams own different services and want separate changelogs
+- Contracts are colocated with service code in subdirectories
+
+Use a single root `contractual.yaml` when:
+
+- All contracts are released together as a bundle
+- A single team owns all contracts
+- You want one unified changelog
+
+## Example monorepo structure
+
+```
+my-monorepo/
+├── services/
+│   ├── orders/
+│   │   ├── contractual.yaml           # Orders service config
+│   │   ├── .contractual/              # Orders versioning state
+│   │   │   ├── versions.json
+│   │   │   ├── changesets/
+│   │   │   └── snapshots/
+│   │   └── specs/
+│   │       └── orders.openapi.yaml
+│   ├── inventory/
+│   │   ├── contractual.yaml           # Inventory service config
+│   │   ├── .contractual/
+│   │   │   ├── versions.json
+│   │   │   ├── changesets/
+│   │   │   └── snapshots/
+│   │   └── specs/
+│   │       └── inventory.openapi.yaml
+│   └── notifications/
+│       ├── contractual.yaml
+│       ├── .contractual/
+│       └── schemas/
+│           └── notification-event.json
+├── .github/
+│   └── workflows/
+│       ├── contractual-orders-pr.yml
+│       ├── contractual-inventory-pr.yml
+│       ├── contractual-orders-release.yml
+│       └── contractual-inventory-release.yml
+└── package.json
+```
+
+## Multiple `contractual.yaml` files
+
+Each service config is self-contained. Paths in the config are relative to the config file itself.
+
+```yaml
+# services/orders/contractual.yaml
+# yaml-language-server: $schema=https://contractual.dev/schema.json
+
+contracts:
+  - name: orders-api
+    type: openapi
+    spec: ./specs/orders.openapi.yaml
+```
+
+```yaml
+# services/inventory/contractual.yaml
+# yaml-language-server: $schema=https://contractual.dev/schema.json
+
+contracts:
+  - name: inventory-api
+    type: openapi
+    spec: ./specs/inventory.openapi.yaml
+  - name: inventory-events
+    type: json-schema
+    spec: ./schemas/inventory-event.schema.json
+```
+
+Initialize each service separately:
+
+```bash
+contractual init --config services/orders/contractual.yaml
+contractual init --config services/inventory/contractual.yaml
+```
+
+## Path filtering in GitHub Actions
+
+Create one pair of workflows per service. Use `paths` to trigger the workflow only when that service's files change.
+
+### PR check per service
+
+```yaml
+# .github/workflows/contractual-orders-pr.yml
+name: Contractual PR Check — Orders
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    paths:
+      - 'services/orders/specs/**'
+      - 'services/orders/schemas/**'
+      - 'services/orders/contractual.yaml'
+      - 'services/orders/.contractual/**'
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  check:
+    name: Check orders contracts
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.head_ref }}
+
+      - uses: contractual-dev/contractual@v1
+        with:
+          mode: pr-check
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          config-path: services/orders/contractual.yaml
+```
+
+```yaml
+# .github/workflows/contractual-inventory-pr.yml
+name: Contractual PR Check — Inventory
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    paths:
+      - 'services/inventory/specs/**'
+      - 'services/inventory/schemas/**'
+      - 'services/inventory/contractual.yaml'
+      - 'services/inventory/.contractual/**'
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  check:
+    name: Check inventory contracts
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.head_ref }}
+
+      - uses: contractual-dev/contractual@v1
+        with:
+          mode: pr-check
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          config-path: services/inventory/contractual.yaml
+```
+
+### Release per service
+
+```yaml
+# .github/workflows/contractual-orders-release.yml
+name: Contractual Release — Orders
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'services/orders/.contractual/changesets/**'
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  release:
+    name: Version orders contracts
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: contractual-dev/contractual@v1
+        with:
+          mode: release
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          config-path: services/orders/contractual.yaml
+          version-pr-title: "Version Contracts — Orders"
+          version-pr-branch: "contractual/version-orders"
+```
+
+<Aside type="tip">
+Use distinct `version-pr-branch` values per service (for example, `contractual/version-orders` and `contractual/version-inventory`). If two services bump versions simultaneously, they need separate branches to avoid conflicts.
+</Aside>
+
+## Shared vs isolated versioning
+
+### Isolated versioning (recommended)
+
+Each service has its own `.contractual/` directory. Versions are completely independent. `orders-api` can be at `3.1.0` while `inventory-api` is at `1.0.0`.
+
+This is the setup shown above — one `contractual.yaml` per service, one `.contractual/` per service.
+
+### Shared versioning
+
+All contracts share one `contractual.yaml` at the repo root and one `.contractual/` directory. All contracts are versioned together — a change to any one of them produces a single Version Contracts PR that bumps all affected contracts.
+
+```yaml
+# contractual.yaml (at repo root)
+# yaml-language-server: $schema=https://contractual.dev/schema.json
+
+contracts:
+  - name: orders-api
+    type: openapi
+    spec: ./services/orders/specs/orders.openapi.yaml
+
+  - name: inventory-api
+    type: openapi
+    spec: ./services/inventory/specs/inventory.openapi.yaml
+
+  - name: inventory-events
+    type: json-schema
+    spec: ./services/inventory/schemas/inventory-event.schema.json
+```
+
+Use shared versioning when contracts are tightly coupled and consumers expect them to be released as a bundle.
+
+## Running CLI commands per service
+
+Pass `--config` to any CLI command to target a specific service:
+
+```bash
+# Lint only the orders service
+contractual lint --config services/orders/contractual.yaml
+
+# Check breaking changes for inventory
+contractual breaking --config services/inventory/contractual.yaml
+
+# Version the notifications service
+contractual version --config services/notifications/contractual.yaml
+```
+
+## Using a matrix job
+
+For repositories with many services that follow the same pattern, a matrix job reduces workflow duplication:
+
+```yaml
+# .github/workflows/contractual-pr.yml
+name: Contractual PR Check
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  check:
+    name: Check ${{ matrix.service }} contracts
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - service: orders
+            paths: 'services/orders'
+          - service: inventory
+            paths: 'services/inventory'
+          - service: notifications
+            paths: 'services/notifications'
+    # Only run for services whose files changed.
+    # Requires actions/changed-files or similar.
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.head_ref }}
+
+      - name: Check for changed files
+        id: changed
+        uses: tj-actions/changed-files@v44
+        with:
+          files: ${{ matrix.paths }}/**
+
+      - name: Run Contractual PR check
+        if: steps.changed.outputs.any_changed == 'true'
+        uses: contractual-dev/contractual@v1
+        with:
+          mode: pr-check
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          config-path: ${{ matrix.paths }}/contractual.yaml
+```
+
+<Aside type="note">
+The matrix approach requires a third-party action like `tj-actions/changed-files` to detect which matrix entries have relevant file changes. Alternatively, rely on the `paths` trigger to skip the entire workflow, and remove the per-matrix check step.
+</Aside>
+
+## Next steps
+
+- [GitHub Action Setup](/guides/github-action) — complete Action input reference including `config-path`
+- [Configuration](/guides/configuration) — `contractual.yaml` field reference
+- [Managing Versions](/guides/versioning) — how the `.contractual/` directory works per service

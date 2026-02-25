@@ -1,0 +1,74 @@
+---
+// index.astro - Technical project landing page for contractual.dev
+// Standalone Astro page — NOT wrapped in the Starlight layout.
+import Landing from '../components/Landing.astro';
+import '../styles/custom.css';
+---
+
+<!doctype html>
+<html lang="en" dir="ltr">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+
+    <!-- Primary meta -->
+    <title>Contractual — Schema contract lifecycle for OpenAPI, JSON Schema, AsyncAPI, and ODCS.</title>
+    <meta
+      name="description"
+      content="Lint, detect breaking changes, version, and release your API contracts from a single config file. Supports OpenAPI, JSON Schema, AsyncAPI, and ODCS."
+    />
+    <meta name="author" content="Contractual" />
+
+    <!-- Open Graph -->
+    <meta property="og:type" content="website" />
+    <meta property="og:url" content="https://contractual.dev/" />
+    <meta property="og:title" content="Contractual — Schema contract lifecycle for OpenAPI, JSON Schema, AsyncAPI, and ODCS." />
+    <meta
+      property="og:description"
+      content="Lint, detect breaking changes, version, and release your API contracts from a single config file."
+    />
+
+    <!-- Twitter Card -->
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="Contractual — Schema contract lifecycle for OpenAPI, JSON Schema, AsyncAPI, and ODCS." />
+    <meta
+      name="twitter:description"
+      content="Lint, detect breaking changes, version, and release your API contracts from a single config file."
+    />
+
+    <!-- Canonical -->
+    <link rel="canonical" href="https://contractual.dev/" />
+
+    <!-- Favicon -->
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+
+    <!-- Prevent Starlight from injecting its own styles on this page -->
+    <meta name="astro-view-transitions" content="false" />
+
+    <style is:global>
+      /* Hard reset for landing page — removes Tailwind/browser defaults */
+      *, *::before, *::after {
+        box-sizing: border-box;
+        border-width: 0;
+        border-style: solid;
+        border-color: transparent;
+      }
+      html {
+        margin: 0;
+        padding: 0;
+        border: 0;
+        background-color: #0a0f1e;
+      }
+      body {
+        margin: 0;
+        padding: 0;
+        border: 0;
+        background-color: #0a0f1e;
+        overflow-x: hidden;
+      }
+    </style>
+  </head>
+  <body>
+    <Landing />
+  </body>
+</html>

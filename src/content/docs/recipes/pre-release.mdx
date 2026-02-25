@@ -1,0 +1,298 @@
+---
+title: Pre-release Workflow
+description: Publish alpha and beta contract versions for early feedback before promoting to a stable release.
+---
+
+import { Aside, Steps, Tabs, TabItem } from '@astrojs/starlight/components';
+
+Pre-release versions let you ship an experimental or in-progress version of your contract — `1.0.0-alpha.1`, `1.0.0-beta.2` — and collect feedback from early adopters before committing to the stable API surface. This recipe shows you how Contractual handles pre-release versioning, how to create pre-release changesets manually, and how to promote a pre-release to stable.
+
+## Pre-release version format
+
+Contractual follows [Semantic Versioning 2.0.0](https://semver.org/) pre-release syntax:
+
+```
+{major}.{minor}.{patch}-{pre-release-tag}.{iteration}
+```
+
+Examples:
+
+| Version | Meaning |
+|---|---|
+| `1.0.0-alpha.1` | First alpha iteration of 1.0.0 |
+| `1.0.0-alpha.2` | Second alpha iteration — something changed |
+| `1.0.0-beta.1` | Beta channel — more stable than alpha |
+| `1.0.0-rc.1` | Release candidate — nearly stable |
+| `1.0.0` | Stable release |
+
+Pre-release versions sort below their stable counterpart. `1.0.0-alpha.1` comes before `1.0.0`. Contractual does not automatically enter or exit pre-release mode — you control it with manual changesets.
+
+## When to use pre-release
+
+Use pre-release contract versions when:
+
+- You are redesigning a major part of your API and want early feedback
+- A partner team needs to integrate against a draft spec before it is final
+- You are running an alpha program with a small number of consumers
+- You need to validate a breaking change in production before committing to it
+
+## Step 1: Enter pre-release mode with a manual changeset
+
+Pre-release versioning starts with a manual changeset. Contractual does not auto-detect that you "want" a pre-release — you declare it explicitly.
+
+```bash
+contractual changeset
+```
+
+At the interactive prompt, select your contract, choose `major` as the bump level (or whichever level applies), and write a description. Then open the generated changeset file in `.contractual/changesets/` and edit the frontmatter to add the pre-release tag:
+
+```markdown
+---
+"orders-api": major
+pre-release: alpha
+---
+
+Complete redesign of the Orders API. Pagination model changed from
+offset-based to cursor-based. Response envelope removed — resources
+are returned directly.
+
+This is an alpha release. The API surface may change before 1.0.0-stable.
+```
+
+The `pre-release` frontmatter key tells Contractual to suffix the version with the tag. When `contractual version` consumes this changeset, it produces `1.0.0-alpha.1` instead of `1.0.0`.
+
+<Aside type="note">
+The first pre-release iteration is always `.1`. Subsequent changesets with the same tag increment the iteration: `alpha.1` → `alpha.2` → `alpha.3`.
+</Aside>
+
+## Step 2: Run `contractual version`
+
+```bash
+contractual version
+```
+
+Expected output:
+
+```
+Consuming changesets...
+
+  orders-api
+    0.3.2 → 1.0.0-alpha.1  (major pre-release bump)
+
+Updated .contractual/versions.json
+Updated .contractual/snapshots/orders-api/1.0.0-alpha.1.yaml
+Deleted  .contractual/changesets/brave-wolf-leaps.md
+Updated  CHANGELOG.md
+
+Done. Commit the changes and push.
+```
+
+The snapshot is stored at `.contractual/snapshots/orders-api/1.0.0-alpha.1.yaml`. All subsequent breaking change detection compares against this snapshot.
+
+## Step 3: Iterate on the pre-release
+
+As you refine the alpha API, each new change gets its own changeset with the same pre-release tag.
+
+```bash
+contractual changeset --contract orders-api --bump minor --message "Added cursor field to ListOrders response"
+```
+
+Then edit the changeset to carry the pre-release tag:
+
+```markdown
+---
+"orders-api": minor
+pre-release: alpha
+---
+
+Added cursor field to ListOrders response for cursor-based pagination.
+```
+
+When `contractual version` runs, it increments the iteration:
+
+```
+orders-api
+  1.0.0-alpha.1 → 1.0.0-alpha.2  (minor pre-release bump)
+```
+
+<Aside type="tip">
+During active pre-release development, create changesets for every significant change, even small ones. The iteration number communicates to early adopters exactly how much has changed since they last integrated.
+</Aside>
+
+## Step 4: Promote to stable
+
+When you are satisfied with the pre-release API surface, promote it to stable with a final changeset. This changeset carries no `pre-release` tag:
+
+```bash
+contractual changeset
+```
+
+Create a changeset with bump level `patch` (since no new changes are being made — you are simply releasing the pre-release as stable):
+
+```markdown
+---
+"orders-api": patch
+---
+
+Promoting 1.0.0-alpha.3 to stable. No changes from the last alpha.
+API surface is final.
+```
+
+When `contractual version` runs:
+
+```
+orders-api
+  1.0.0-alpha.3 → 1.0.0  (patch stable release)
+```
+
+The snapshot is now written at `.contractual/snapshots/orders-api/1.0.0.yaml`. Future breaking change detection compares against the stable release.
+
+## CI workflow for pre-release branches
+
+Run pre-release versioning on a dedicated branch so it does not interfere with your main release flow.
+
+<Tabs>
+  <TabItem label="Pre-release workflow">
+    ```yaml
+    # .github/workflows/contractual-prerelease.yml
+    name: Contractual Pre-release
+
+    on:
+      push:
+        branches:
+          - alpha
+          - beta
+          - 'rc/**'
+        paths:
+          - '.contractual/changesets/**'
+
+    permissions:
+      contents: write
+      pull-requests: write
+
+    jobs:
+      contractual-prerelease:
+        name: Version pre-release contracts
+        runs-on: ubuntu-latest
+        steps:
+          - name: Checkout
+            uses: actions/checkout@v4
+            with:
+              fetch-depth: 0
+
+          - name: Run Contractual release
+            uses: contractual-dev/contractual@v1
+            with:
+              mode: release
+              github-token: ${{ secrets.GITHUB_TOKEN }}
+              version-pr-title: "Pre-release: Version Contracts"
+              version-pr-branch: "contractual/prerelease-version"
+    ```
+  </TabItem>
+  <TabItem label="Main release workflow">
+    ```yaml
+    # .github/workflows/contractual-release.yml
+    name: Contractual Release
+
+    on:
+      push:
+        branches:
+          - main
+        paths:
+          - '.contractual/changesets/**'
+
+    permissions:
+      contents: write
+      pull-requests: write
+
+    jobs:
+      contractual-release:
+        name: Version contracts
+        runs-on: ubuntu-latest
+        steps:
+          - name: Checkout
+            uses: actions/checkout@v4
+            with:
+              fetch-depth: 0
+
+          - name: Run Contractual release
+            uses: contractual-dev/contractual@v1
+            with:
+              mode: release
+              github-token: ${{ secrets.GITHUB_TOKEN }}
+    ```
+  </TabItem>
+</Tabs>
+
+## Handling breaking changes in pre-release
+
+During pre-release you often want to allow breaking changes freely — the contract is not stable yet. Set `fail-on-breaking: false` on your pre-release PR check:
+
+```yaml
+# .github/workflows/contractual-pr-alpha.yml
+name: Contractual PR Check (Alpha)
+
+on:
+  pull_request:
+    branches:
+      - alpha
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  contractual-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.head_ref }}
+
+      - uses: contractual-dev/contractual@v1
+        with:
+          mode: pr-check
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          # Allow breaking changes during alpha. Breaking changes are still
+          # detected and reported in the PR comment, but do not block the merge.
+          fail-on-breaking: false
+```
+
+<Aside type="caution">
+Keep `fail-on-breaking: true` on your main branch PR check even during pre-release development. Breaking changes on your stable contract are still breaking, regardless of what is happening on the alpha branch.
+</Aside>
+
+## Pre-release version in `versions.json`
+
+After the first pre-release bump, `versions.json` reflects the pre-release version:
+
+```json
+{
+  "orders-api": "1.0.0-alpha.2",
+  "order-schema": "2.1.0"
+}
+```
+
+`order-schema` at `2.1.0` is on a normal stable release cycle. `orders-api` is in pre-release. Both are managed independently.
+
+## Summary: pre-release lifecycle
+
+```
+0.3.2          ← stable, current release
+  ↓ major changeset with pre-release: alpha
+1.0.0-alpha.1  ← enter pre-release
+  ↓ minor changeset with pre-release: alpha
+1.0.0-alpha.2  ← iterate
+  ↓ patch changeset with pre-release: alpha
+1.0.0-alpha.3  ← iterate again
+  ↓ patch changeset (no pre-release tag)
+1.0.0          ← promoted to stable
+```
+
+## Next steps
+
+- [Managing Versions](/guides/versioning) — changeset lifecycle and `contractual version` internals
+- [Enforcing No Breaking Changes](/recipes/no-breaking-changes) — restrict breaking changes on stable contracts while pre-release is in progress
+- [Migrating from Manual Versioning](/recipes/migration) — if you have existing specs with pre-release versions that you want to bring under Contractual

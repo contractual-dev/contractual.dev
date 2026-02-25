@@ -1,0 +1,268 @@
+---
+title: "Quick Start: GitHub Action"
+description: Add Contractual's breaking change detection and automated versioning to your GitHub pull requests in 5 minutes.
+---
+
+import { Aside, Tabs, TabItem, LinkCard, Card, CardGrid } from '@astrojs/starlight/components';
+
+This guide adds two GitHub Actions workflows to your repository: one that runs on every pull request to detect breaking changes and post a diff comment, and one that handles automated versioning and changelog generation when changes land on your main branch.
+
+Estimated time: 5 minutes.
+
+## Prerequisites
+
+Before setting up the GitHub Action, you need:
+
+- A repository with at least one spec file (OpenAPI, JSON Schema, AsyncAPI, or ODCS)
+- A `contractual.yaml` at the repository root
+- A `.contractual/` directory with at least one snapshot (so the differ has a baseline)
+
+If you haven't done those steps yet, complete the [CLI Quick Start](/getting-started/quickstart-cli) first and commit the resulting files.
+
+<Aside type="tip">
+Commit `contractual.yaml`, `.contractual/snapshots/`, and `.contractual/versions.json` to your repository. These are the files the GitHub Action reads. Do not commit `.contractual/changesets/` — the Action generates those automatically on PRs.
+</Aside>
+
+## Step 1: Create the PR check workflow
+
+Create `.github/workflows/contractual-pr.yml` in your repository:
+
+```yaml
+# .github/workflows/contractual-pr.yml
+# Runs on every pull request that touches a spec file.
+# Posts a diff table comment on the PR and auto-commits a changeset.
+
+name: Contractual PR Check
+
+on:
+  pull_request:
+    # Optional: restrict to paths that contain your specs.
+    # Remove the paths filter to run on every PR.
+    paths:
+      - 'specs/**'
+      - 'schemas/**'
+      - 'contractual.yaml'
+
+permissions:
+  # Required to post PR comments.
+  pull-requests: write
+  # Required to commit the auto-generated changeset back to the PR branch.
+  contents: write
+
+jobs:
+  contractual-check:
+    name: Check contracts
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          # Fetch full history so contractual can compare against snapshots.
+          fetch-depth: 0
+
+      - name: Run Contractual
+        uses: contractual-dev/contractual@v1
+        with:
+          # pr-check mode: runs lint, breaking, and changeset.
+          mode: pr-check
+          # Post a structured diff table as a PR comment.
+          post-comment: true
+          # Automatically commit the generated changeset to the PR branch.
+          auto-commit-changeset: true
+          # Optional: fail the check if breaking changes are detected.
+          # Remove or set to false to allow breaking changes through.
+          fail-on: breaking
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Optional: enable AI-powered explanations in PR comments.
+          # ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+```
+
+<Aside type="note">
+The `paths` filter means the workflow only runs when spec files or the config change. If you want it to run on every PR regardless of what changed, remove the `paths` block entirely.
+</Aside>
+
+## Step 2: Create the release workflow
+
+Create `.github/workflows/contractual-release.yml`:
+
+```yaml
+# .github/workflows/contractual-release.yml
+# Runs when changesets land on the main branch (after PR merge).
+# Opens a "Version Contracts" PR with bumped versions and updated changelogs.
+# Merge that PR to publish the new versions.
+
+name: Contractual Release
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      # Only trigger when a changeset file lands on main.
+      - '.contractual/changesets/**'
+
+permissions:
+  # Required to open the "Version Contracts" PR.
+  pull-requests: write
+  # Required to commit version bumps and changelog updates.
+  contents: write
+
+jobs:
+  contractual-release:
+    name: Version contracts
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          # Use a PAT if you need the Version Contracts PR to
+          # trigger other workflows (GITHUB_TOKEN cannot do this).
+          # token: ${{ secrets.CONTRACTUAL_PAT }}
+
+      - name: Run Contractual
+        uses: contractual-dev/contractual@v1
+        with:
+          # release mode: runs version, updates snapshots, writes changelog,
+          # and opens or updates the "Version Contracts" PR.
+          mode: release
+          # Title of the auto-generated PR.
+          version-pr-title: 'chore: version contracts'
+          # Branch the version bump commits land on before the PR merges.
+          version-pr-branch: 'contractual/version-contracts'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Optional: enable AI-powered changelog enhancement.
+          # ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+```
+
+## Step 3: Commit and push
+
+```bash
+git add .github/workflows/contractual-pr.yml
+git add .github/workflows/contractual-release.yml
+git commit -m "chore: add contractual workflows"
+git push
+```
+
+## Step 4: Open a PR that changes a spec
+
+Create a new branch, edit one of your spec files (for example, change a field type or remove a property), and open a pull request.
+
+```bash
+git checkout -b feat/update-order-schema
+# edit your spec file...
+git add schemas/order.schema.json
+git commit -m "feat: change amount field type to number"
+git push -u origin feat/update-order-schema
+# open the PR on GitHub
+```
+
+When the PR is opened, the `Contractual PR Check` workflow runs. Here is what happens:
+
+1. Contractual checks out the PR branch and runs `contractual lint` — any schema validation errors are reported immediately.
+2. It runs `contractual breaking`, comparing the changed spec against the snapshot on `main`.
+3. It posts a comment on the PR with a structured diff table:
+
+```
+## Contractual — Contract Changes
+
+| Contract     | Change type | Classification | Details                         |
+|--------------|-------------|----------------|---------------------------------|
+| order-schema | type change | BREAKING       | amount: string → number         |
+
+**1 breaking change detected.**
+
+A changeset has been committed to this branch:
+`.contractual/changesets/lucky-tiger-runs.md`
+
+Review the changeset and edit the description before merging.
+```
+
+4. It commits a `.contractual/changesets/lucky-tiger-runs.md` file directly to your PR branch with the auto-detected classification and a generated description.
+
+<Aside type="caution">
+If `fail-on: breaking` is set and breaking changes are detected, the check will exit with a non-zero code, failing any required status check you've configured. To allow the PR to merge despite breaking changes, a reviewer must either edit the changeset to override the classification, or remove the `fail-on` setting.
+</Aside>
+
+## Step 5: Merge the PR
+
+When you merge the PR, the changeset file (`.contractual/changesets/lucky-tiger-runs.md`) lands on your `main` branch. This triggers the `Contractual Release` workflow via the `paths` filter on `.contractual/changesets/**`.
+
+The release workflow runs `contractual version` in `release` mode, which:
+
+1. Reads all pending changesets on `main`
+2. Determines the highest bump level for each contract
+3. Bumps version numbers in `.contractual/versions.json`
+4. Saves new snapshots
+5. Appends entries to each contract's CHANGELOG
+6. Deletes the consumed changesets
+7. Commits all of the above to a branch named `contractual/version-contracts`
+8. Opens (or updates) a pull request titled `chore: version contracts`
+
+Review and merge that "Version Contracts" PR to publish the new contract versions and complete the release cycle.
+
+<Aside type="tip">
+Multiple PRs can merge between release cycles. Contractual batches all pending changesets together — if one PR is `minor` and another is `major`, the contract gets a `major` bump. The "Version Contracts" PR is continuously updated until you merge it.
+</Aside>
+
+## Step 6: Enable AI features (optional)
+
+Contractual can use Claude to write plain-language explanations of breaking changes in PR comments, suggest migration paths for consumers, and enrich changelog entries.
+
+To enable AI features:
+
+1. Go to your repository **Settings** → **Secrets and variables** → **Actions**
+2. Add a new secret named `ANTHROPIC_API_KEY` with your Anthropic API key
+3. Uncomment the `ANTHROPIC_API_KEY` line in both workflow files
+
+```yaml
+env:
+  GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+  ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+```
+
+With the API key set, PR comments include an additional section:
+
+```
+### What this means for consumers
+
+The `amount` field has changed from a formatted string (e.g. `"12.50"`) to a
+numeric value (e.g. `12.50`). Any consumer that reads `amount` as a string
+and passes it directly to a display or storage layer will need to update
+their parsing logic to handle a number.
+
+**Suggested migration:** Update all deserialization code that reads `amount`
+to expect `number` instead of `string`. If you're using TypeScript, the
+generated types will reflect this change automatically after regenerating.
+```
+
+Contractual degrades gracefully without the key — all structural diffing, classification, and versioning work exactly the same. AI features are additive.
+
+## What's next
+
+<CardGrid>
+  <Card title="GitHub Action Reference" icon="github">
+    Complete inputs, outputs, permissions, and advanced configuration for the Action.
+
+    [View Reference](/reference/github-action)
+  </Card>
+  <Card title="Configuration" icon="setting">
+    Add more contracts, configure custom linters, set up output generation.
+
+    [View Configuration Guide](/guides/configuration)
+  </Card>
+  <Card title="Managing Versions" icon="document">
+    Deep dive into the versioning workflow and the `.contractual/` directory.
+
+    [View Versioning Guide](/guides/versioning)
+  </Card>
+  <Card title="AI-Powered Features" icon="star">
+    Full setup guide for AI explanations, changelog enrichment, and spec enhancement.
+
+    [View AI Guide](/guides/ai-features)
+  </Card>
+</CardGrid>

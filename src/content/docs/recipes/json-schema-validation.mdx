@@ -1,0 +1,355 @@
+---
+title: JSON Schema Validation
+description: Use Contractual to version a JSON Schema contract, compile an ajv validator from it, and enforce breaking change detection in CI.
+---
+
+import { Aside, Tabs, TabItem, Steps } from '@astrojs/starlight/components';
+
+This recipe shows you how to manage a JSON Schema contract with Contractual, compile a production-ready [ajv](https://ajv.js.org/) validator from it, and catch breaking changes before they reach consumers. The compiled validator ships as a pre-built artifact so runtime validation requires no schema parsing overhead.
+
+## When to use this recipe
+
+Use this recipe when:
+
+- You exchange structured data (events, API payloads, configuration files) validated against a JSON Schema
+- You want to enforce that the schema never changes in a way that breaks existing data
+- You want a fast, dependency-free runtime validator that does not require ajv at runtime
+
+## Project structure
+
+```
+my-service/
+├── contractual.yaml
+├── schemas/
+│   └── order.schema.json          # Source of truth
+├── dist/
+│   └── validators/
+│       └── order.js               # Compiled — do not edit by hand
+├── .contractual/
+│   ├── versions.json
+│   ├── changesets/
+│   └── snapshots/
+│       └── order-schema/
+│           └── 1.0.0.json
+└── package.json
+```
+
+## Step 1: Write the JSON Schema contract
+
+Create `schemas/order.schema.json`:
+
+```json
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://example.com/order.schema.json",
+  "title": "Order",
+  "description": "A customer order",
+  "type": "object",
+  "required": ["id", "status", "amount", "createdAt"],
+  "additionalProperties": false,
+  "properties": {
+    "id": {
+      "type": "string",
+      "description": "Unique order identifier"
+    },
+    "status": {
+      "type": "string",
+      "enum": ["pending", "confirmed", "shipped", "delivered"],
+      "description": "Current order status"
+    },
+    "amount": {
+      "type": "number",
+      "minimum": 0,
+      "description": "Order total in the smallest currency unit (e.g. cents)"
+    },
+    "createdAt": {
+      "type": "string",
+      "format": "date-time",
+      "description": "ISO 8601 timestamp"
+    },
+    "notes": {
+      "type": "string",
+      "description": "Optional free-text notes"
+    }
+  }
+}
+```
+
+## Step 2: Configure Contractual
+
+Create `contractual.yaml`:
+
+```yaml
+# yaml-language-server: $schema=https://contractual.dev/schema.json
+
+contracts:
+  - name: order-schema
+    type: json-schema
+    spec: ./schemas/order.schema.json
+    outputs:
+      - name: compiled-validator
+        # Compile the schema to a standalone JS module.
+        # -s = schema path, -o = output path, --code-es5 = ES5-compatible output.
+        command: "ajv compile -s {spec} -o ./dist/validators/order.js --code-es5"
+```
+
+The `{spec}` placeholder is replaced at runtime with the absolute path to `schemas/order.schema.json`.
+
+<Aside type="note">
+The compiled validator is a self-contained function. It does not import ajv at runtime, which makes it suitable for environments where you want to avoid bundling ajv as a production dependency.
+</Aside>
+
+## Step 3: Install dependencies
+
+```bash
+npm install --save-dev ajv ajv-cli
+npm install ajv   # runtime dependency only if you use the non-compiled validator
+```
+
+## Step 4: Initialize and generate
+
+<Steps>
+
+1. Initialize Contractual.
+
+   ```bash
+   contractual init
+   ```
+
+2. Create the output directory.
+
+   ```bash
+   mkdir -p dist/validators
+   ```
+
+3. Run lint to validate the schema and trigger the compile step.
+
+   ```bash
+   contractual lint
+   ```
+
+   Expected output:
+
+   ```
+   Linting contracts...
+
+     ✓ order-schema   schemas/order.schema.json
+
+   Running outputs...
+
+     ✓ compiled-validator   ajv compile -s schemas/order.schema.json -o dist/validators/order.js --code-es5
+
+   All contracts passed.
+   ```
+
+</Steps>
+
+## Step 5: Use the validator in your application
+
+The compiled validator is a CommonJS module that exports a single validation function.
+
+<Tabs>
+  <TabItem label="CommonJS">
+    ```javascript
+    const validate = require("./dist/validators/order.js");
+
+    const payload = {
+      id: "ord_123",
+      status: "pending",
+      amount: 4999,
+      createdAt: "2026-02-18T10:30:00Z",
+    };
+
+    if (!validate(payload)) {
+      console.error("Validation failed:", validate.errors);
+      throw new Error("Invalid order payload");
+    }
+
+    // payload is valid
+    console.log("Order is valid:", payload);
+    ```
+  </TabItem>
+  <TabItem label="TypeScript">
+    ```typescript
+    // ajv exports types for the compiled validator signature.
+    import Ajv from "ajv";
+    type ValidateFunction = ReturnType<Ajv["compile"]>;
+
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const validate: ValidateFunction = require("./dist/validators/order.js");
+
+    interface Order {
+      id: string;
+      status: "pending" | "confirmed" | "shipped" | "delivered";
+      amount: number;
+      createdAt: string;
+      notes?: string;
+    }
+
+    function assertValidOrder(data: unknown): asserts data is Order {
+      if (!validate(data)) {
+        throw new Error(
+          `Invalid order: ${JSON.stringify(validate.errors, null, 2)}`
+        );
+      }
+    }
+
+    const payload: unknown = JSON.parse(rawBody);
+    assertValidOrder(payload);
+    // TypeScript now knows payload is Order
+    ```
+  </TabItem>
+  <TabItem label="Express middleware">
+    ```typescript
+    import { Request, Response, NextFunction } from "express";
+    const validate = require("./dist/validators/order.js");
+
+    export function validateOrderBody(
+      req: Request,
+      res: Response,
+      next: NextFunction
+    ): void {
+      if (!validate(req.body)) {
+        res.status(400).json({
+          error: "Invalid request body",
+          details: validate.errors,
+        });
+        return;
+      }
+      next();
+    }
+    ```
+  </TabItem>
+</Tabs>
+
+## Breaking change detection workflow
+
+JSON Schema breaking changes are changes that make previously valid data invalid. Contractual detects these automatically.
+
+### What counts as breaking
+
+| Change | Breaking? | Reason |
+|---|---|---|
+| Adding a required field | Yes | Existing data that omits the field becomes invalid |
+| Narrowing a type (`number` → `integer`) | Yes | Values that were valid before may not be valid now |
+| Removing an enum value | Yes | Data with the removed value becomes invalid |
+| Adding a `minimum` constraint | Yes | Values below the minimum become invalid |
+| Removing an optional field | Yes | Data with that field may be rejected if `additionalProperties: false` |
+| Adding an optional field | No | Existing data is still valid |
+| Relaxing a type (`integer` → `number`) | No | More data is now valid, not less |
+| Adding an enum value | No | Existing values remain valid |
+
+### Detect breaking changes locally
+
+```bash
+contractual breaking
+```
+
+Example output when you add a required field without a default:
+
+```
+Checking for breaking changes...
+
+  ✗ order-schema   schemas/order.schema.json
+
+    BREAKING  /required
+              Added required field: customerId
+              Existing data that omits this field will fail validation.
+
+1 breaking change detected.
+Exit code: 1
+```
+
+### CI workflow
+
+Add breaking change detection to your pull request workflow:
+
+```yaml
+# .github/workflows/contractual-pr.yml
+name: Contractual PR Check
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    paths:
+      - 'schemas/**'
+      - 'contractual.yaml'
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  contractual-check:
+    name: Check contracts
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.head_ref }}
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run Contractual PR check
+        uses: contractual-dev/contractual@v1
+        with:
+          mode: pr-check
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          # Block merges when breaking changes are detected (default: true)
+          fail-on-breaking: true
+```
+
+<Aside type="tip">
+After each pull request merges and `contractual version` runs, the compiled validator in `dist/validators/order.js` will reflect the new schema. Add a step to your release workflow that runs `contractual lint` to trigger recompilation.
+</Aside>
+
+## Integration with a release workflow
+
+When `contractual version` runs and bumps the schema version, trigger a recompile and publish the new validator:
+
+```yaml
+# .github/workflows/contractual-release.yml
+jobs:
+  contractual-release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - run: npm ci
+
+      - name: Run Contractual release
+        uses: contractual-dev/contractual@v1
+        with:
+          mode: release
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      # Recompile the validator at the new schema version
+      - name: Recompile validator
+        run: npx contractual lint
+
+      # Publish updated validator to npm (optional)
+      - name: Publish
+        run: npm publish
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+```
+
+## Next steps
+
+- [Enforcing No Breaking Changes](/recipes/no-breaking-changes) — block all breaking changes from merging with `fail-on-breaking: true`
+- [Configuration](/guides/configuration) — `outputs` reference and all available placeholders
+- [Change Classifications](/reference/change-classifications) — what Contractual considers breaking for JSON Schema

@@ -1,0 +1,110 @@
+---
+title: contractual status
+description: Display current contract versions and a summary of pending changesets with projected version bumps.
+---
+
+import { Code } from '@astrojs/starlight/components';
+
+See at a glance which contracts have pending changesets and what their next version will be.
+
+## Usage
+
+```sh
+contractual status [--format <fmt>]
+```
+
+## Description
+
+`contractual status` reads `.contractual/versions.json` for current versions and scans `.contractual/changesets/` for pending changeset files. For each registered contract it shows:
+
+- The **current version** from the last `contractual version` run.
+- Any **pending changesets** that have not yet been consumed, grouped by contract.
+- The **projected next version** based on the highest pending bump type.
+
+Contracts with no pending changesets are listed with a clean status. The command exits with code `1` when any contract has pending changesets, and `0` when there is nothing to release. This makes `status` useful as a CI gate — for example, to remind contributors to run `contractual version` before merging a release branch.
+
+## Options
+
+| Flag | Description | Default |
+|---|---|---|
+| `--format <fmt>` | Output format. One of `text`, `json`. | `text` |
+
+## Examples
+
+### Status with pending changesets
+
+<Code code={`$ contractual status
+
+Contract Versions
+─────────────────────────────────────────────────────
+  payments-api   v1.4.2  →  v2.0.0  (major pending)
+  user-schema    v0.9.1  →  v0.10.0 (minor pending)
+  events-api     v3.1.0  ✔  up to date
+
+Pending changesets (2):
+  2024-02-17-payments-api-remove-charges-delete.md
+    contracts: payments-api  bump: major
+  2024-02-10-user-schema-add-phone.md
+    contracts: user-schema   bump: minor
+
+Run \`contractual version\` to apply these changesets.`} lang="ansi" title="Terminal" />
+
+### Clean status with no pending changesets
+
+<Code code={`$ contractual status
+
+Contract Versions
+─────────────────────────────────────────────────────
+  payments-api   v2.0.0  ✔  up to date
+  user-schema    v0.10.0 ✔  up to date
+  events-api     v3.1.0  ✔  up to date
+
+No pending changesets.`} lang="ansi" title="Terminal" />
+
+### JSON output for CI and tooling
+
+<Code code={`$ contractual status --format json
+{
+  "contracts": [
+    {
+      "name": "payments-api",
+      "currentVersion": "1.4.2",
+      "projectedVersion": "2.0.0",
+      "projectedBump": "major",
+      "pendingChangesets": [
+        "2024-02-17-payments-api-remove-charges-delete.md"
+      ]
+    },
+    {
+      "name": "user-schema",
+      "currentVersion": "0.9.1",
+      "projectedVersion": "0.10.0",
+      "projectedBump": "minor",
+      "pendingChangesets": [
+        "2024-02-10-user-schema-add-phone.md"
+      ]
+    },
+    {
+      "name": "events-api",
+      "currentVersion": "3.1.0",
+      "projectedVersion": null,
+      "projectedBump": null,
+      "pendingChangesets": []
+    }
+  ],
+  "summary": { "pending": 2, "upToDate": 1 }
+}`} lang="json" title="Terminal" />
+
+## Exit Codes
+
+| Code | Meaning |
+|---|---|
+| `0` | No pending changesets — all contracts are up to date. |
+| `1` | One or more contracts have pending changesets waiting to be consumed by `contractual version`. |
+
+## See Also
+
+- [`contractual version`](/reference/cli/version) — consume pending changesets and produce a release.
+- [`contractual changeset`](/reference/cli/changeset) — create a new changeset for detected changes.
+- [Managing Versions](/guides/versioning) — full guide for the Contractual versioning workflow.
+- [Exit Codes](/reference/exit-codes) — full table of exit codes across all commands.

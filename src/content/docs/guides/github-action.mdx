@@ -1,0 +1,274 @@
+---
+title: GitHub Action Setup
+description: Comprehensive guide to configuring the Contractual GitHub Action — inputs, outputs, permissions, PR check workflow, release workflow, and customization.
+---
+
+import { Tabs, TabItem, Aside } from '@astrojs/starlight/components';
+
+The Contractual GitHub Action runs in two modes: `pr-check` detects breaking changes and generates changesets on pull requests, and `release` consumes changesets and opens a "Version Contracts" PR on your main branch.
+
+## Action inputs
+
+| Input | Required | Default | Description |
+|---|---|---|---|
+| `mode` | Yes | — | `pr-check` or `release`. Controls which workflow runs. |
+| `github-token` | Yes | `${{ github.token }}` | Token used to post PR comments and open the Version Contracts PR. |
+| `config-path` | No | `contractual.yaml` | Path to your config file, relative to the repo root. |
+| `fail-on-breaking` | No | `true` | Exit with code 1 if breaking changes are detected in `pr-check` mode. |
+| `auto-changeset` | No | `true` | Automatically commit a generated changeset to the PR branch in `pr-check` mode. |
+| `version-pr-title` | No | `Version Contracts` | Title of the pull request opened by `release` mode. |
+| `version-pr-branch` | No | `contractual/version` | Branch name for the Version Contracts PR. |
+| `anthropic-api-key` | No | — | Enables AI-powered PR comments and changelog enrichment. |
+
+## Action outputs
+
+| Output | Mode | Description |
+|---|---|---|
+| `breaking-detected` | `pr-check` | `true` if any breaking changes were found, `false` otherwise. |
+| `contracts-changed` | `pr-check` | Comma-separated list of contract names with detected changes. |
+| `changeset-created` | `pr-check` | `true` if a changeset file was committed to the branch. |
+| `version-pr-url` | `release` | URL of the Version Contracts PR opened (or updated). |
+| `versions-bumped` | `release` | Comma-separated list of `name@version` pairs for bumped contracts. |
+
+## Required permissions
+
+The Action needs write access to create PR comments, commit changeset files, and open pull requests.
+
+```yaml
+permissions:
+  contents: write       # Commit changesets to PR branch; commit version bumps
+  pull-requests: write  # Post PR comments; open Version Contracts PR
+```
+
+Add these at the workflow level or the job level. If your repository has default read-only permissions, you must set them explicitly.
+
+## PR check workflow
+
+This workflow runs on every pull request that modifies files in your spec directories. It detects breaking changes, posts a diff table as a PR comment, and commits a changeset file to the branch.
+
+```yaml
+# .github/workflows/contractual-pr.yml
+name: Contractual PR Check
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    # Optional: only run when spec files change.
+    # Remove the paths filter if you want the check on every PR.
+    paths:
+      - 'specs/**'
+      - 'schemas/**'
+      - 'contractual.yaml'
+
+permissions:
+  contents: write       # Commit the auto-generated changeset to the branch
+  pull-requests: write  # Post the diff table as a PR comment
+
+jobs:
+  contractual-check:
+    name: Check contracts
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          # fetch-depth: 0 is required so Contractual can read
+          # snapshot history from the .contractual/ directory.
+          fetch-depth: 0
+          # Use the PR head ref so the Action pushes the changeset
+          # back to the correct branch.
+          ref: ${{ github.head_ref }}
+
+      - name: Run Contractual PR check
+        uses: contractual-dev/contractual@v1
+        with:
+          mode: pr-check
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          # Optional: add your Anthropic key for AI-powered PR comments.
+          # anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
+```
+
+### What happens on each PR
+
+1. The Action checks out the branch at the latest commit.
+2. `contractual lint` validates every contract.
+3. `contractual breaking` compares each spec against its snapshot in `.contractual/snapshots/`.
+4. A PR comment is posted with a diff table — breaking changes in red, non-breaking in yellow, patch in green.
+5. A changeset file is generated and committed to the PR branch.
+6. If `fail-on-breaking` is `true` (the default) and breaking changes are found, the workflow exits with a non-zero code, blocking the merge until the developer resolves or overrides the classification.
+
+## Release workflow
+
+This workflow runs on pushes to your main branch. It looks for changeset files in `.contractual/changesets/`. When it finds them, it runs `contractual version` and opens a "Version Contracts" pull request.
+
+```yaml
+# .github/workflows/contractual-release.yml
+name: Contractual Release
+
+on:
+  push:
+    branches:
+      - main
+    # Optional: scope to the same paths as the PR check.
+    paths:
+      - '.contractual/changesets/**'
+
+permissions:
+  contents: write       # Commit version bumps, snapshots, and changelog
+  pull-requests: write  # Open the Version Contracts PR
+
+jobs:
+  contractual-release:
+    name: Version contracts
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Run Contractual release
+        id: release
+        uses: contractual-dev/contractual@v1
+        with:
+          mode: release
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      # Optional: after the Version Contracts PR is merged,
+      # use the output to trigger downstream steps.
+      - name: Log version PR URL
+        if: steps.release.outputs.version-pr-url != ''
+        run: echo "Version PR opened at ${{ steps.release.outputs.version-pr-url }}"
+```
+
+### What happens on each push to main
+
+1. The Action checks for changeset files in `.contractual/changesets/`.
+2. If no changesets exist, the job exits cleanly with no changes.
+3. If changesets exist, `contractual version` consumes them: versions are bumped, snapshots are written, `CHANGELOG.md` is updated, and changeset files are deleted.
+4. The Action opens (or force-updates) a pull request titled "Version Contracts" on the `contractual/version` branch.
+5. A maintainer reviews and merges the Version Contracts PR to complete the release.
+
+## Customization
+
+### Controlling fail-on-breaking behavior
+
+By default, the PR check fails if breaking changes are detected. To report breaking changes without blocking merges — for example, on a repository with a deprecation-first policy — set `fail-on-breaking` to `false`:
+
+```yaml
+- name: Run Contractual PR check
+  uses: contractual-dev/contractual@v1
+  with:
+    mode: pr-check
+    github-token: ${{ secrets.GITHUB_TOKEN }}
+    fail-on-breaking: false   # Report breaking changes but do not block the PR
+```
+
+### Disabling auto-changeset
+
+If you prefer developers to write changesets manually, disable automatic changeset generation:
+
+```yaml
+- name: Run Contractual PR check
+  uses: contractual-dev/contractual@v1
+  with:
+    mode: pr-check
+    github-token: ${{ secrets.GITHUB_TOKEN }}
+    auto-changeset: false   # Do not commit a changeset to the branch automatically
+```
+
+With `auto-changeset: false`, the PR comment still shows the diff table, but no changeset file is committed. Developers create changesets manually using `contractual changeset` locally, or the PR check fails if no changeset is present.
+
+### Custom Version PR title and branch
+
+```yaml
+- name: Run Contractual release
+  uses: contractual-dev/contractual@v1
+  with:
+    mode: release
+    github-token: ${{ secrets.GITHUB_TOKEN }}
+    version-pr-title: "chore: release contract versions"
+    version-pr-branch: "release/contractual"
+```
+
+### Custom GitHub token
+
+Use a personal access token or a GitHub App token when you need the Version Contracts PR to trigger other workflows. By default, PRs opened by `GITHUB_TOKEN` do not trigger workflow runs (a GitHub limitation).
+
+```yaml
+- name: Run Contractual release
+  uses: contractual-dev/contractual@v1
+  with:
+    mode: release
+    github-token: ${{ secrets.CONTRACTUAL_PAT }}   # Personal access token with repo scope
+```
+
+<Aside type="tip">
+To avoid storing a personal access token, use a GitHub App with a short-lived installation token. The [tibdex/github-app-token](https://github.com/tibdex/github-app-token) action generates one automatically.
+</Aside>
+
+## Forked PR limitations
+
+GitHub does not allow workflows triggered by pull requests from forks to have write permissions by default. The Contractual Action needs write access to commit changesets and post comments, so it cannot fully function on fork PRs with the default `GITHUB_TOKEN`.
+
+Options:
+
+**Option 1: Use `pull_request_target`**
+
+`pull_request_target` runs in the context of the base branch and has write permissions. Use it with caution — review the [GitHub security guidance](https://docs.github.com/en/actions/using-workflows/events-that-trigger-workflows#pull_request_target) before enabling.
+
+```yaml
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened]
+```
+
+**Option 2: Require contributors to create a branch**
+
+For open source projects, require external contributors to create a branch on the upstream repository rather than a fork. Most maintainers follow this approach.
+
+**Option 3: Disable auto-changeset for forks**
+
+Run the PR check with `auto-changeset: false` for fork PRs. Breaking changes are still detected and reported, but no changeset is committed.
+
+```yaml
+- name: Run Contractual PR check
+  uses: contractual-dev/contractual@v1
+  with:
+    mode: pr-check
+    github-token: ${{ secrets.GITHUB_TOKEN }}
+    auto-changeset: ${{ github.event.pull_request.head.repo.fork == false }}
+```
+
+## Monorepo path filtering
+
+In a monorepo with multiple services — each with their own specs — use `paths` filters to run the check only when relevant files change.
+
+```yaml
+# For a service at services/orders/
+on:
+  pull_request:
+    paths:
+      - 'services/orders/specs/**'
+      - 'services/orders/contractual.yaml'
+```
+
+Pair this with `config-path` to point at the correct config file:
+
+```yaml
+- name: Run Contractual PR check
+  uses: contractual-dev/contractual@v1
+  with:
+    mode: pr-check
+    github-token: ${{ secrets.GITHUB_TOKEN }}
+    config-path: services/orders/contractual.yaml
+```
+
+Run one job per service if they have independent release cycles. See [Monorepo Setup](/guides/monorepo) for a complete walkthrough.
+
+## Next steps
+
+- [Monorepo Setup](/guides/monorepo) — multiple services, independent versioning
+- [AI-Powered Features](/guides/ai-features) — add `anthropic-api-key` for enriched PR comments
+- [GitHub Action Reference](/reference/github-action) — complete inputs, outputs, and environment variables
+- [Managing Versions](/guides/versioning) — what happens inside `contractual version`

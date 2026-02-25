@@ -1,0 +1,216 @@
+---
+title: Changeset File Format
+description: Reference for the .contractual/changesets/*.md file format — frontmatter, body, naming, and how auto-generation and manual creation work.
+---
+
+import { Aside, Code, Tabs, TabItem } from '@astrojs/starlight/components';
+
+Changesets are the mechanism Contractual uses to decouple when a contract changes from when a version is released. Each changeset is a Markdown file stored in `.contractual/changesets/`. A changeset declares which contracts are changing and at what semver level, and provides human-readable context about the change.
+
+---
+
+## File structure
+
+A changeset file has two parts: a YAML frontmatter block and a Markdown body.
+
+```markdown
+---
+"orders-api": major
+"order-schema": minor
+---
+
+## orders-api
+
+Removed the `GET /orders/{id}/details` endpoint. Consumers using this endpoint
+must migrate to `GET /orders/{id}?include=details` before upgrading.
+
+## order-schema
+
+Added optional `shipping_address` field to the Order object. Consumers do not
+need to make any changes — the field is not required and existing responses
+remain valid.
+```
+
+---
+
+## Frontmatter
+
+The frontmatter is a YAML block delimited by `---`. Each line declares one contract and its bump level.
+
+### Format
+
+```yaml
+---
+"contract-name": major | minor | patch
+---
+```
+
+- The key is the contract `name` as defined in `contractual.yaml`, enclosed in double quotes.
+- The value is one of `major`, `minor`, or `patch` (no quotes required, but accepted).
+- Multiple contracts can appear in the same changeset.
+- Order does not matter.
+
+### Valid examples
+
+Single contract, single bump:
+
+```markdown
+---
+"orders-api": major
+---
+```
+
+Multiple contracts with different bump levels:
+
+```markdown
+---
+"orders-api": major
+"order-schema": minor
+"payment-schema": patch
+---
+```
+
+<Aside type="caution">
+The contract name in the frontmatter must exactly match the `name` field in `contractual.yaml`. Mismatched names cause `contractual version` to exit with a configuration error.
+</Aside>
+
+---
+
+## Body
+
+The body is free-form Markdown. It is appended directly to `CHANGELOG.md` under the version heading when `contractual version` runs.
+
+**Recommended structure:** One `##` heading per contract, followed by a description of what changed and any migration steps consumers need to take.
+
+```markdown
+## orders-api
+
+Removed the `legacy_id` field from the Order response object. This field was
+deprecated in v2.1.0. Consumers relying on `order.legacy_id` should use
+`order.id` instead.
+
+## order-schema
+
+Added `billing_address` as an optional field. No migration required.
+```
+
+The body can be empty if you have nothing to add beyond the structural diff output. Contractual will still generate a minimal changelog entry from the detected changes.
+
+When `ai.features.changelog` is enabled, Contractual replaces the body with an LLM-generated summary if the body is absent or contains only a placeholder.
+
+---
+
+## Naming convention
+
+Changeset files use an `adjective-noun-verb.md` naming pattern. This is the same convention used by [Changesets](https://github.com/changesets/changesets) and produces human-readable names that are easy to distinguish in pull request file trees.
+
+Examples:
+
+- `gentle-tigers-fly.md`
+- `angry-lions-jump.md`
+- `lucky-foxes-swim.md`
+
+Contractual generates names using a dictionary of common adjectives, animals, and verbs. The combination is random and has no semantic meaning — the content of the file is what matters.
+
+<Aside type="note">
+You do not need to follow the naming convention for manually created changesets. Any `.md` filename works. The convention exists to ensure uniqueness in automated generation, not as a technical requirement.
+</Aside>
+
+---
+
+## How auto-generation works
+
+When the GitHub Action runs in `pr-check` mode and detects spec changes with no existing changeset, it generates one automatically (when `auto-changeset: true` is set on the action input).
+
+The generation process:
+
+1. Contractual runs `contractual breaking` to produce the structural diff.
+2. Each detected change is classified according to the [Change Classifications](/reference/change-classifications) rules.
+3. The highest classification across all changes for each contract becomes the frontmatter bump level.
+4. A changeset body is generated describing each detected change using templates. If AI is enabled, the LLM writes the body instead.
+5. The file is committed to the PR branch with the auto-generated name.
+
+The auto-generated file is a starting point. You are expected to review it and edit the classification or body before the PR merges if the auto-detection is wrong.
+
+---
+
+## Creating a changeset manually
+
+Use the `contractual changeset` command to create a changeset interactively:
+
+```bash
+contractual changeset
+```
+
+The command presents a contract selection prompt and a bump level prompt, then opens the generated file in your `$EDITOR`.
+
+To create one without interaction (useful in scripts):
+
+```bash
+contractual changeset --contract orders-api --bump major --no-interactive
+```
+
+To create one by hand, create a `.md` file in `.contractual/changesets/` with the correct frontmatter:
+
+```bash
+touch .contractual/changesets/silver-wolves-dance.md
+```
+
+Then open it in your editor and write the frontmatter and body.
+
+---
+
+## Editing auto-generated classifications
+
+If auto-detection classifies a change incorrectly, edit the frontmatter directly:
+
+**Before (auto-generated):**
+
+```markdown
+---
+"orders-api": major
+---
+
+Removed field `internal_trace_id` from Order response.
+```
+
+**After (corrected):**
+
+```markdown
+---
+"orders-api": patch
+---
+
+Removed the internal `internal_trace_id` field from the Order response. This
+field was never documented, never included in the published schema, and no
+external consumers reference it. No migration required.
+```
+
+Contractual uses the value in the file at `contractual version` time. It does not re-run detection or override your edit.
+
+---
+
+## Where changesets live
+
+```
+.contractual/
+  changesets/
+    gentle-tigers-fly.md     # created on PR #42
+    lucky-foxes-swim.md      # created on PR #43
+  history/
+    orders-api/              # snapshots per contract
+      1.2.0.yaml
+      1.3.0.yaml
+  versions.json              # current version of each contract
+```
+
+All files in `.contractual/changesets/` are consumed and deleted when `contractual version` runs. The directory is empty between releases.
+
+---
+
+## See also
+
+- [CLI Commands — changeset](/reference/cli/changeset)
+- [Change Classifications](/reference/change-classifications)
+- [Concept: The Changeset Model](/concepts/changesets)
+- [Guide: Managing Versions](/guides/versioning)

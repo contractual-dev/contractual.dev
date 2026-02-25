@@ -1,0 +1,209 @@
+---
+title: Why Contractual
+description: The problem with schema lifecycle tooling today, why existing approaches fall short, and what Contractual does differently.
+---
+
+import { Aside, LinkCard, CardGrid } from '@astrojs/starlight/components';
+
+Schema tooling has a solved linting story and an unsolved versioning story. Contractual is the versioning story.
+
+This page explains the problem space honestly, including where Contractual fits, where it does not, and what it cannot do.
+
+---
+
+## The problem
+
+Every schema ecosystem needs the same lifecycle:
+
+```
+validate → detect breaking changes → version → release
+```
+
+This is true whether you are shipping an OpenAPI spec, a JSON Schema for event payloads, an AsyncAPI document, or an Open Data Contract Standard (ODCS) file. The lifecycle is the same. The tooling is not.
+
+**Protobuf has a complete solution.** [Buf](https://buf.build) provides a single CLI with lint, breaking change detection, code generation, and a schema registry. The Protobuf community has had this for years.
+
+**Every other ecosystem assembles its own pipeline.** A typical team managing an OpenAPI spec today uses:
+
+- Spectral or Redocly for linting
+- A hand-rolled CI script for breaking change detection
+- Git tags or manual `package.json` edits for versioning
+- A changelog that gets forgotten under pressure
+
+This works until it does not. The hand-rolled CI script has edge cases nobody documented. The changelog is three versions behind. A developer on a different team adds a required field to a shared event schema and nobody notices until the next deploy.
+
+The problem is not that the individual tools are bad. The problem is that nothing connects them into a reproducible workflow.
+
+<Aside type="note">
+This gap has been documented in the JSON Schema community. See the [JSON Schema GSoC issue #984](https://github.com/json-schema-org/community/issues/984) tracking the need for breaking change tooling as an open problem.
+</Aside>
+
+---
+
+## Existing approaches to breaking change detection
+
+Three established patterns exist for detecting breaking changes in schema contracts. Each has real tradeoffs. Contractual takes the third approach — not because the others are wrong, but because they solve different parts of the problem.
+
+### Consumer-driven contracts (Pact)
+
+Consumers write tests that express expectations about the producer. When a producer change would violate a consumer's test, the pipeline fails.
+
+**What it does well:** Catches semantic breaking changes that structural diffing cannot see. If a field changes its meaning — same name, same type, different business behavior — consumer tests catch it. Structural diffing does not.
+
+**The tradeoffs:** Consumer-driven contracts require organization-wide adoption. Every consumer team must write and maintain their tests. Without full adoption, there are gaps. The approach also does not help with historical event replay: you cannot run consumer tests against events that were stored in Kafka six months ago.
+
+### Schema registries (Confluent, AWS Glue)
+
+A centralized service validates messages against registered schemas at runtime. The registry enforces compatibility rules — `BACKWARD`, `FORWARD`, `FULL` — and rejects incompatible schema updates.
+
+**What it does well:** Strong runtime enforcement with no gaps in coverage. Every message that passes through the system was validated against the registered schema. Works well for Avro and Protobuf ecosystems where the registry is a natural fit.
+
+**The tradeoffs:** Adds infrastructure and introduces latency on every message. Primarily designed for Avro and Protobuf — JSON Schema and OpenAPI support is limited. The registry lives outside your repository; your versioning history is not in git.
+
+### Spec-level structural diffing in CI
+
+Compare the schema structure in pull requests. Flag breaking changes before they merge. No runtime infrastructure required.
+
+**What it does well:** Zero operational overhead. Works on any schema format. Integrates with existing PR workflows. Catches breaking changes before they reach production.
+
+**The tradeoffs:** Cannot see business-logic breaking changes. A field rename is two structural changes — removal and addition — but Contractual cannot know the rename was intentional and safe. A field whose meaning changes silently is invisible to structural diffing.
+
+**Contractual takes the third approach.** These three approaches are complementary. Contractual handles the CI gate; Pact handles semantic contracts where adopted; a schema registry handles runtime enforcement where required.
+
+<Aside type="tip">
+For event-driven architectures specifically, Yan Cui's [event versioning strategies](https://theburningmonk.com/2025/04/event-versioning-strategies-for-event-driven-architectures/) is a thorough treatment of the tradeoffs involved. Contractual handles the schema lifecycle side; event versioning strategy is a separate architectural concern.
+</Aside>
+
+---
+
+## The Buf model
+
+Buf demonstrated something important: a single CLI with declarative config, pointed at a repository, can replace a fragmented collection of Protobuf scripts and manual processes. Before Buf, Protobuf teams had the same problem OpenAPI teams have today — lint here, break-check there, version somewhere else.
+
+Contractual applies the same pattern to OpenAPI, JSON Schema, AsyncAPI, and ODCS.
+
+The key insight from Buf's approach is that the CLI should not build everything itself. Buf does not replace `protoc`; it orchestrates it. Contractual does not replace Spectral, Redocly, or ajv. It orchestrates them:
+
+```
+contractual lint     →  shells out to Spectral / Redocly / ajv
+contractual breaking →  uses built-in structural differs
+contractual version  →  reads changesets, bumps versions, writes changelog
+```
+
+The configuration is declarative and lives in your repository. The workflow is reproducible across machines and CI environments.
+
+---
+
+## What Contractual adds
+
+Orchestration alone would not justify a new tool. Contractual adds two things that do not exist elsewhere.
+
+### A JSON Schema structural differ
+
+No production-quality breaking change detection existed for JSON Schema before Contractual. The [JSON Schema community has tracked this as an open gap](https://github.com/json-schema-org/community/issues/984).
+
+Contractual's built-in differ walks two schemas using depth-first traversal, resolves all `$ref` pointers, and classifies every change as breaking, non-breaking, patch, or unknown. It handles object properties, string and numeric constraints, enums, array items, and composition keywords.
+
+Contractual includes built-in structural differs for all supported formats.
+
+See [Breaking Change Detection](/concepts/breaking-changes) for the full classification table and algorithm details.
+
+### A versioning workflow for schema contracts
+
+Changesets (the npm package) decouples the moment of change from the moment of release. A developer declares the severity of their change in a small markdown file at PR time. The release step adds up the declarations and bumps versions accordingly.
+
+Changesets works well for code packages. For schemas, it has one limitation: it is deliberately blind to what changed. It trusts the human to declare the right bump level.
+
+Contractual extends this model with auto-detection. When you run `contractual breaking`, it diffs the schema and writes the changeset frontmatter automatically, at the correct severity level, based on structural analysis. You review it, optionally override it, and merge.
+
+```
+Changesets:    human declares "this is a major change"
+Contractual:   differ detects a required field was added → declares "major" for you
+```
+
+You still have full override control. Auto-detection is a starting point, not a constraint.
+
+See [The Changeset Model](/concepts/changesets) for the full model and override mechanics.
+
+---
+
+## What Contractual is not
+
+Being precise about scope is important. Contractual does not do the following things.
+
+**Not a schema registry.** Contractual has no runtime component. It does not validate messages in production. It does not replace Confluent Schema Registry or AWS Glue. It runs in your CI pipeline and in local development — not in your service mesh.
+
+**Not a testing framework.** Contractual is not Pact. It does not help consumers write expectations about producers. If you need semantic contract testing, Pact is the right tool. Contractual and Pact complement each other.
+
+**Not a replacement for your linter.** Contractual does not implement its own lint rules. It runs Spectral, Redocly, and ajv as configured. Your existing ruleset continues to work. Contractual is the shell around your linter, not a replacement for it.
+
+**Not a package manager.** Contractual does not publish schemas to a registry, resolve schema dependencies, or manage schema downloads. It manages versions in your repository, in git.
+
+**Not Changesets for schemas.** This comparison deserves care. Changesets is blind by design — it works with any kind of change to any kind of package. Contractual is not blind. It reads your schema and detects what changed. That distinction matters: Contractual can tell you if your manually declared `minor` bump is actually a `major` change. Changesets cannot.
+
+---
+
+## Tradeoffs and limitations
+
+Contractual is built on structural diffing. Structural diffing has inherent limits. You should know these before you rely on Contractual as your only safety gate.
+
+**Business-logic breaking changes are invisible.** If you rename a field that your consumers depend on — removing the old name and adding the new one — Contractual sees a removal (breaking) and an addition (non-breaking). It cannot see that this is semantically a rename. If consumers have runtime logic that branches on field values, changing those values is invisible to structural diffing entirely.
+
+**JSON Schema composition creates ambiguous cases.** `anyOf`, `oneOf`, and `not` are set-theoretic operators. Determining whether a change to a composition is breaking requires computing the intersection of the sets of valid values — a problem that is undecidable in the general case. Contractual flags these as `Unknown` and asks for human review. If your schemas rely heavily on `anyOf` or `oneOf`, expect more Unknown classifications.
+
+**History stored in git can bloat repositories.** Contractual stores schema snapshots in `.contractual/` in your repository. For large schemas with frequent changes, this grows over time. For most teams this is not a problem — schema snapshots are small compared to code. For teams with very large schemas or very high change frequency, consider this before committing to the approach.
+
+**Currently GitHub Actions only.** The release automation (the Version Contracts PR) requires GitHub Actions. The CLI works anywhere, but the full two-PR workflow requires GitHub. GitLab CI and Bitbucket Pipelines are on the roadmap.
+
+<Aside type="caution">
+Contractual's structural differ gives you confidence about syntactic breaking changes. It does not give you confidence about semantic breaking changes. For high-stakes contracts, pair Contractual with consumer-driven contract tests for the semantic layer.
+</Aside>
+
+---
+
+## Further reading
+
+<CardGrid>
+  <LinkCard
+    title="JSON Schema breaking change detection (GSoC #984)"
+    description="The JSON Schema community issue tracking the gap in breaking change tooling that Contractual addresses."
+    href="https://github.com/json-schema-org/community/issues/984"
+  />
+  <LinkCard
+    title="Event versioning strategies for event-driven architectures"
+    description="Yan Cui's thorough treatment of event versioning tradeoffs — the architectural context Contractual operates in."
+    href="https://theburningmonk.com/2025/04/event-versioning-strategies-for-event-driven-architectures/"
+  />
+  <LinkCard
+    title="Buf"
+    description="The Protobuf toolchain that demonstrated the single-CLI, declarative-config model Contractual applies to other schema formats."
+    href="https://buf.build"
+  />
+</CardGrid>
+
+---
+
+## Where to go next
+
+<CardGrid>
+  <LinkCard
+    title="How Contractual Works"
+    description="The mental model: three artifacts, the core workflow, and the two-PR release pattern."
+    href="/concepts/how-it-works"
+  />
+  <LinkCard
+    title="Breaking Change Detection"
+    description="The structural differ algorithm, classification rules, and edge cases you should know about."
+    href="/concepts/breaking-changes"
+  />
+  <LinkCard
+    title="The Changeset Model"
+    description="How Contractual decouples the moment of change from the moment of release."
+    href="/concepts/changesets"
+  />
+  <LinkCard
+    title="Quick Start: CLI"
+    description="Run your first breaking change check in under five minutes."
+    href="/getting-started/quickstart-cli"
+  />
+</CardGrid>

@@ -1,0 +1,95 @@
+---
+title: contractual changeset
+description: Generate a changeset file that describes the intent behind detected contract changes.
+---
+
+import { Code } from '@astrojs/starlight/components';
+
+Create a structured changeset file that records the bump type and summary for your current contract changes.
+
+## Usage
+
+```sh
+contractual changeset [--no-interactive] [--empty]
+```
+
+## Description
+
+`contractual changeset` reads the diff between your current specs and the last snapshot and opens an interactive prompt so you can describe the changes and confirm the bump type (major, minor, or patch). The result is a Markdown file written to `.contractual/changesets/` with a generated filename.
+
+Changeset files are the mechanism Contractual uses to accumulate release intent across multiple commits and contributors. They are committed to source control alongside your spec changes and consumed later by [`contractual version`](/reference/cli/version).
+
+**Interactive mode (default):** Contractual displays the detected changes, pre-fills a suggested bump type, and lets you edit the summary and override the bump before writing the file.
+
+**Non-interactive mode (`--no-interactive`):** Contractual auto-generates the changeset using the highest detected bump type and a generated summary. Use this in CI pipelines or automated workflows.
+
+**Empty changesets (`--empty`):** Creates a changeset file with no associated spec changes. Useful when you need to trigger a release (for example, a changelog-only update) without modifying a spec.
+
+Each changeset file follows the [Changeset File Format](/reference/changeset-format).
+
+## Options
+
+| Flag | Description | Default |
+|---|---|---|
+| `--no-interactive` | Skip the interactive prompt and auto-generate the changeset. | Off (interactive by default) |
+| `--empty` | Create a changeset with no detected changes. | Off |
+
+## Examples
+
+### Interactive changeset creation
+
+<Code code={`$ contractual changeset
+
+Detected changes in payments-api (openapi):
+  ✖  [breaking]      DELETE /v1/charges/{id}  Endpoint removed
+  ✔  [non-breaking]  GET /v1/charges          Response field \`metadata\` added
+
+? Bump type for payments-api: (major)
+? Summary: Remove deprecated DELETE /v1/charges/{id} endpoint and add metadata field
+
+Wrote .contractual/changesets/2024-02-17-payments-api-remove-charges-delete.md`} lang="ansi" title="Terminal" />
+
+### Non-interactive mode for CI
+
+<Code code={`$ contractual changeset --no-interactive
+
+Auto-generating changeset for detected changes...
+
+  payments-api: major bump detected (breaking changes found)
+
+Wrote .contractual/changesets/2024-02-17-payments-api-auto.md`} lang="ansi" title="Terminal" />
+
+### Create an empty changeset
+
+<Code code={`$ contractual changeset --empty
+
+? Bump type: (patch)
+? Summary: Update changelog with maintainer notes
+
+Wrote .contractual/changesets/2024-02-17-empty-maintainer-notes.md`} lang="ansi" title="Terminal" />
+
+### Generated changeset file
+
+The file written to `.contractual/changesets/` looks like this:
+
+<Code code={`---
+contracts:
+  - payments-api
+bump: major
+---
+
+Remove deprecated DELETE /v1/charges/{id} endpoint and add metadata field to charge responses.`} lang="yaml" title=".contractual/changesets/2024-02-17-payments-api-remove-charges-delete.md" />
+
+## Exit Codes
+
+| Code | Meaning |
+|---|---|
+| `0` | Changeset file created successfully. |
+| `2` | Configuration error — e.g. `contractual.yaml` not found. |
+
+## See Also
+
+- [Changeset File Format](/reference/changeset-format) — the full schema for changeset Markdown files.
+- [The Changeset Model](/concepts/changesets) — concept guide explaining how changesets accumulate into a release.
+- [`contractual breaking`](/reference/cli/breaking) — review breaking changes before creating a changeset.
+- [`contractual version`](/reference/cli/version) — consume changesets to produce a versioned release.

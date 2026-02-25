@@ -1,0 +1,213 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://contractual.dev/schema.json",
+  "title": "Contractual Configuration",
+  "description": "Configuration schema for contractual.yaml — the schema contract lifecycle orchestrator. Manages lint validation, breaking change detection, versioning, and release publishing across OpenAPI, JSON Schema, AsyncAPI, and ODCS contracts.",
+  "type": "object",
+  "required": ["contracts"],
+  "additionalProperties": false,
+  "properties": {
+    "contracts": {
+      "type": "array",
+      "description": "The list of contracts Contractual manages. Every command — lint, breaking, changeset, version, status — operates on all contracts unless filtered with --contract. You must define at least one contract.",
+      "minItems": 1,
+      "items": {
+        "$ref": "#/$defs/contract"
+      }
+    },
+    "changeset": {
+      "$ref": "#/$defs/changeset"
+    },
+    "publish": {
+      "$ref": "#/$defs/publish"
+    },
+    "ai": {
+      "$ref": "#/$defs/ai"
+    }
+  },
+  "$defs": {
+    "contract": {
+      "type": "object",
+      "description": "A single contract entry. Defines which spec file to manage and how to govern it.",
+      "required": ["name", "type", "spec"],
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "Unique identifier for this contract. Used in changeset file frontmatter, version history (versions.json), snapshot directory names, CLI output, and PR comment tables. Must be a valid slug: lowercase letters, numbers, and hyphens only. No spaces.",
+          "pattern": "^[a-z][a-z0-9-]*$",
+          "examples": ["orders-api", "order-schema", "payment-events"]
+        },
+        "type": {
+          "type": "string",
+          "description": "The format of the spec file. Controls which default linter and differ Contractual uses for this contract.",
+          "enum": ["openapi", "json-schema", "asyncapi", "odcs"],
+          "$comment": "openapi: Redocly lint + built-in structural differ. json-schema: ajv meta-validation + built-in structural differ. asyncapi: @asyncapi/parser + built-in differ (planned). odcs: ajv vs ODCS schema + built-in differ (planned).",
+          "examples": ["openapi", "json-schema"]
+        },
+        "spec": {
+          "type": "string",
+          "description": "Path to the spec file, relative to the location of contractual.yaml. Glob patterns are not supported here — one path per contract entry.",
+          "examples": [
+            "./specs/orders.openapi.yaml",
+            "./schemas/order.schema.json",
+            "./specs/events.asyncapi.yaml"
+          ]
+        },
+        "lint": {
+          "description": "Override the default linter command for this contract, or set to false to disable linting entirely. When set to a string, use {spec} as a placeholder for the resolved spec file path. When omitted, Contractual uses the built-in linter for the contract type.",
+          "oneOf": [
+            {
+              "type": "string",
+              "description": "Custom lint command. Use {spec} as a placeholder for the spec file path at runtime.",
+              "examples": [
+                "spectral lint {spec} --format json",
+                "redocly lint {spec} --format stylish",
+                "./scripts/validate.sh {spec}"
+              ]
+            },
+            {
+              "type": "boolean",
+              "const": false,
+              "description": "Set to false to disable linting for this contract. The lint command exits 0 for this contract."
+            }
+          ]
+        },
+        "breaking": {
+          "description": "Override the default breaking change detection command for this contract, or set to false to disable breaking change detection entirely. When set to a string, use {old} and {new} as placeholders for the previous snapshot path and the current spec path. When omitted, Contractual uses the built-in differ for the contract type.",
+          "oneOf": [
+            {
+              "type": "string",
+              "description": "Custom breaking change detection command. Use {old} for the snapshot path and {new} for the current spec path.",
+              "examples": [
+                "my-differ breaking {old} {new} --format json",
+                "./scripts/diff.py {old} {new}"
+              ]
+            },
+            {
+              "type": "boolean",
+              "const": false,
+              "description": "Set to false to disable breaking change detection for this contract. The breaking command exits 0 and generates no change classifications."
+            }
+          ]
+        },
+        "generate": {
+          "type": "array",
+          "description": "Commands to run after a successful version bump in contractual version. Use {spec} for the spec path, {name} for the contract name, and {version} for the new semver version string. Commands run in order — any failure stops the sequence and reports an error.",
+          "items": {
+            "type": "string",
+            "description": "A shell command to execute. Supports {spec}, {name}, and {version} placeholders.",
+            "examples": [
+              "openapi-typescript {spec} -o ./src/api/{name}.ts",
+              "orval --input {spec} --output ./src/generated/",
+              "ajv compile -s {spec} -o ./dist/validators/{name}.js"
+            ]
+          },
+          "examples": [
+            ["openapi-typescript {spec} -o ./src/api/orders.ts"],
+            [
+              "orval --input {spec} --output ./src/generated/orders-client.ts",
+              "redocly build-docs {spec} -o ./docs/orders-api.html"
+            ]
+          ]
+        }
+      }
+    },
+    "changeset": {
+      "type": "object",
+      "description": "Controls how Contractual handles changeset files — the markdown files that declare which contracts changed and at what semver level.",
+      "additionalProperties": false,
+      "properties": {
+        "autoDetect": {
+          "type": "boolean",
+          "description": "When true, Contractual uses the structural diff output to automatically classify each detected change as major, minor, or patch and writes that classification into the generated changeset file. Set to false to classify all changes manually.",
+          "default": true,
+          "examples": [true, false]
+        },
+        "requireOnPR": {
+          "type": "boolean",
+          "description": "When true and running in GitHub Action pr-check mode, the action fails if spec changes are detected but no changeset file exists — unless auto-changeset is set to true on the action input, which auto-generates one. Set to false to make changesets optional in PRs.",
+          "default": true,
+          "examples": [true, false]
+        }
+      }
+    },
+    "publish": {
+      "type": "object",
+      "description": "Controls what happens after contractual version runs — once versions are bumped and changelogs are written. Note: contractual version does not push to remote. Add a git push --follow-tags step in your CI workflow, or use the GitHub Action release mode.",
+      "additionalProperties": false,
+      "properties": {
+        "commit": {
+          "type": "boolean",
+          "description": "Commit the version bump and changelog update after contractual version runs.",
+          "default": true,
+          "examples": [true, false]
+        },
+        "tag": {
+          "type": "boolean",
+          "description": "Create a git tag (v{version}) after the version commit.",
+          "default": true,
+          "examples": [true, false]
+        },
+        "release": {
+          "type": "boolean",
+          "description": "Run releaseCommand after tagging. Requires releaseCommand to be set.",
+          "default": false,
+          "examples": [true, false]
+        },
+        "releaseCommand": {
+          "type": "string",
+          "description": "Shell command to run when release is true. Use {version} for the new version string and {name} for the contract name as placeholders.",
+          "examples": [
+            "gh release create v{version} --notes-file CHANGELOG.md",
+            "gh release create v{version} --title 'Release {version}' --notes-file CHANGELOG.md"
+          ]
+        }
+      }
+    },
+    "ai": {
+      "type": "object",
+      "description": "Configuration for optional LLM integration. All AI features degrade gracefully when no API key is available — the tool continues to work without them. Requires the ANTHROPIC_API_KEY environment variable to be set.",
+      "additionalProperties": false,
+      "properties": {
+        "provider": {
+          "type": "string",
+          "description": "The LLM provider to use. Only anthropic is supported in the current release.",
+          "enum": ["anthropic"],
+          "default": "anthropic"
+        },
+        "model": {
+          "type": "string",
+          "description": "The model identifier to pass to the provider API. Use this to pin a specific model version or switch to a faster, lower-cost model for high-volume repositories.",
+          "default": "claude-opus-4-5-20251101",
+          "examples": [
+            "claude-opus-4-5-20251101",
+            "claude-sonnet-4-5-20250929"
+          ]
+        },
+        "features": {
+          "type": "object",
+          "description": "Toggles for individual AI capabilities. All features default to false — you must opt in explicitly.",
+          "additionalProperties": false,
+          "properties": {
+            "explain": {
+              "type": "boolean",
+              "description": "When true, Contractual sends the structural diff to the LLM and includes a natural-language explanation of each change in the PR comment. Helps reviewers understand the impact of contract changes without reading raw schema diffs.",
+              "default": false
+            },
+            "changelog": {
+              "type": "boolean",
+              "description": "When true, Contractual generates an LLM-enriched changelog entry in CHANGELOG.md instead of the default template-formatted entry. The enriched entry includes context about what changed and why it matters to consumers.",
+              "default": false
+            },
+            "enhance": {
+              "type": "boolean",
+              "description": "When true, Contractual can suggest additions to spec metadata — descriptions, examples, and titles — for fields that lack them. This is an interactive feature intended for use with the CLI, not in automated CI runs.",
+              "default": false
+            }
+          }
+        }
+      }
+    }
+  }
+}

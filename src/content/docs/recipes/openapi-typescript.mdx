@@ -1,0 +1,339 @@
+---
+title: OpenAPI + TypeScript Client
+description: Generate a type-safe TypeScript client from your OpenAPI contract and keep it in sync automatically whenever the contract version changes.
+---
+
+import { Aside, Tabs, TabItem, Steps } from '@astrojs/starlight/components';
+
+This recipe shows you how to wire Contractual's `outputs` section to [orval](https://orval.dev) so that every version bump regenerates your TypeScript client automatically. By the end you will have a project where the client is always consistent with the released contract version.
+
+## Project structure
+
+```
+my-api/
+├── contractual.yaml
+├── specs/
+│   └── orders.openapi.yaml        # Source of truth
+├── src/
+│   └── generated/
+│       └── orders-client.ts       # Auto-generated — do not edit by hand
+├── orval.config.ts
+└── .contractual/
+    ├── versions.json
+    ├── changesets/
+    └── snapshots/
+        └── orders-api/
+            └── 1.0.0.yaml
+```
+
+The `src/generated/` directory is fully managed by orval. Commit it to your repository so consumers can always import a working client even without running generation locally.
+
+## Step 1: Write the OpenAPI contract
+
+Create `specs/orders.openapi.yaml`:
+
+```yaml
+openapi: "3.1.0"
+info:
+  title: Orders API
+  version: "1.0.0"
+paths:
+  /orders:
+    get:
+      operationId: listOrders
+      summary: List orders
+      parameters:
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: [pending, confirmed, shipped, delivered]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Order"
+    post:
+      operationId: createOrder
+      summary: Create an order
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateOrderInput"
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Order"
+  /orders/{id}:
+    get:
+      operationId: getOrder
+      summary: Get a single order
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Order"
+        "404":
+          description: Not found
+components:
+  schemas:
+    Order:
+      type: object
+      required: [id, status, amount, createdAt]
+      properties:
+        id:
+          type: string
+        status:
+          type: string
+          enum: [pending, confirmed, shipped, delivered]
+        amount:
+          type: number
+          description: Order total in the smallest currency unit (e.g. cents)
+        createdAt:
+          type: string
+          format: date-time
+    CreateOrderInput:
+      type: object
+      required: [amount]
+      properties:
+        amount:
+          type: number
+        notes:
+          type: string
+```
+
+## Step 2: Configure Contractual
+
+Create `contractual.yaml`:
+
+```yaml
+# yaml-language-server: $schema=https://contractual.dev/schema.json
+
+contracts:
+  - name: orders-api
+    type: openapi
+    spec: ./specs/orders.openapi.yaml
+    outputs:
+      - name: typescript-client
+        command: "orval --config orval.config.ts"
+```
+
+The `outputs` command runs after every successful `contractual lint`. The `{spec}` placeholder is available if you want to pass the path directly, but here the orval config file handles that.
+
+<Aside type="note">
+Outputs run on `contractual lint`, not on `contractual version`. This means the client is regenerated every time lint passes — including during PR checks — not only on release.
+</Aside>
+
+## Step 3: Configure orval
+
+Create `orval.config.ts`:
+
+```typescript
+import { defineConfig } from "orval";
+
+export default defineConfig({
+  ordersApi: {
+    input: {
+      target: "./specs/orders.openapi.yaml",
+    },
+    output: {
+      target: "./src/generated/orders-client.ts",
+      client: "fetch",
+      // Generate a single file with types and functions together.
+      // Use "split-tags" to split by tag instead.
+      mode: "single",
+      // Override the base URL at runtime via environment variable.
+      baseUrl: process.env.ORDERS_API_BASE_URL ?? "http://localhost:3000",
+    },
+  },
+});
+```
+
+<Tabs>
+  <TabItem label="fetch (default)">
+    ```typescript
+    // Generated output uses the native fetch API — zero extra dependencies.
+    import { listOrders } from "./src/generated/orders-client";
+
+    const orders = await listOrders({ status: "pending" });
+    ```
+  </TabItem>
+  <TabItem label="axios">
+    ```typescript
+    // Set client: "axios" in orval.config.ts.
+    import { listOrders } from "./src/generated/orders-client";
+
+    const { data: orders } = await listOrders({ status: "pending" });
+    ```
+  </TabItem>
+  <TabItem label="react-query">
+    ```typescript
+    // Set client: "react-query" in orval.config.ts.
+    import { useListOrders } from "./src/generated/orders-client";
+
+    function OrderList() {
+      const { data, isLoading } = useListOrders({ status: "pending" });
+      // ...
+    }
+    ```
+  </TabItem>
+</Tabs>
+
+## Step 4: Initialize and run
+
+<Steps>
+
+1. Initialize Contractual. This creates the `.contractual/` directory and takes the first snapshot.
+
+   ```bash
+   contractual init
+   ```
+
+2. Install orval.
+
+   ```bash
+   npm install --save-dev orval
+   ```
+
+3. Run lint. This validates the spec and triggers the orval output command.
+
+   ```bash
+   contractual lint
+   ```
+
+   Expected output:
+
+   ```
+   Linting contracts...
+
+     ✓ orders-api   specs/orders.openapi.yaml
+
+   Running outputs...
+
+     ✓ typescript-client   orval --config orval.config.ts
+
+   All contracts passed.
+   ```
+
+4. Verify the generated file exists.
+
+   ```bash
+   ls src/generated/orders-client.ts
+   ```
+
+</Steps>
+
+## Step 5: Regenerate on version bump
+
+Contractual runs outputs after every `contractual lint`. In CI you typically want to regenerate after the Version Contracts PR is merged — when the spec is at its new released version.
+
+Add a job to your release workflow that runs lint after the version bump:
+
+```yaml
+# .github/workflows/contractual-release.yml
+name: Contractual Release
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - '.contractual/changesets/**'
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  contractual-release:
+    name: Version contracts
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run Contractual release
+        id: release
+        uses: contractual-dev/contractual@v1
+        with:
+          mode: release
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      # After the Version Contracts PR is merged, regenerate the client
+      # at the new spec version and commit it back.
+      - name: Regenerate TypeScript client
+        if: steps.release.outputs.versions-bumped != ''
+        run: npx contractual lint
+
+      - name: Commit regenerated client
+        if: steps.release.outputs.versions-bumped != ''
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add src/generated/
+          git diff --cached --quiet || git commit -m "chore: regenerate TypeScript client after contract version bump"
+          git push
+```
+
+<Aside type="tip">
+If you prefer not to commit the generated client to your repository, add `src/generated/` to `.gitignore` and install a `postinstall` script that runs `contractual lint` to regenerate it after `npm install`.
+
+```json
+{
+  "scripts": {
+    "postinstall": "contractual lint"
+  }
+}
+```
+</Aside>
+
+## Triggering regeneration manually
+
+To regenerate the client on demand without running the full workflow:
+
+```bash
+# Regenerate by running lint (outputs are a side effect of lint passing)
+contractual lint
+
+# Or run orval directly
+npx orval --config orval.config.ts
+```
+
+## Handling breaking changes in the client
+
+When `contractual breaking` detects a breaking change in the spec, the auto-generated changeset will carry a `major` bump. After the version is released the regenerated client will reflect the new types. Consumers of the client must update their call sites.
+
+The breaking change workflow gives you a window to communicate this: the PR comment diff table shows exactly which operations changed, and the CHANGELOG entry records the version at which the change landed.
+
+## Next steps
+
+- [Configuration](/guides/configuration) — `outputs` section reference and available placeholders
+- [Enforcing No Breaking Changes](/recipes/no-breaking-changes) — prevent accidental breaking changes from ever merging
+- [Guides: GitHub Action Setup](/guides/github-action) — automate the full PR check and release workflow

@@ -1,0 +1,90 @@
+---
+title: contractual init
+description: Scaffold a Contractual configuration by detecting spec files in your project.
+---
+
+import { Code } from '@astrojs/starlight/components';
+
+Scan your project for spec files and generate the initial `contractual.yaml` configuration with baseline snapshots.
+
+## Usage
+
+```sh
+contractual init [--dir <path>] [--format <fmt>]
+```
+
+## Description
+
+`contractual init` walks your project directory looking for supported contract spec files — OpenAPI (`.yaml`, `.json`), JSON Schema, AsyncAPI, and Open Data Contract Standard (ODCS) files. For each spec it finds, it registers a contract entry in `contractual.yaml` and takes an initial snapshot.
+
+Running `init` is always the first step in adopting Contractual in a project. It is safe to run in an existing repo: it will not overwrite a `contractual.yaml` that already exists.
+
+After `init` completes:
+
+- `contractual.yaml` is created (or left unchanged if it exists).
+- `.contractual/` is created to hold snapshots and changesets.
+- A baseline snapshot is written for every detected contract so that future `breaking` and `lint` runs have a reference point.
+
+## Options
+
+| Flag | Description | Default |
+|---|---|---|
+| `--dir <path>` | Root directory to scan for spec files. | `.` (current directory) |
+| `--format <fmt>` | Output format for the command's own messages. One of `text`, `json`. | `text` |
+
+## Examples
+
+### Initialise from the current directory
+
+<Code code={`$ contractual init
+
+Scanning for contract specs...
+
+  Detected specs
+  ✔  openapi    api/openapi.yaml
+  ✔  json-schema  schemas/user.schema.json
+  ✔  asyncapi   events/asyncapi.yaml
+
+Created contractual.yaml
+Created .contractual/
+Wrote snapshots for 3 contract(s)
+
+Run \`contractual status\` to see your starting versions.`} lang="ansi" title="Terminal" />
+
+### Initialise from a sub-directory
+
+<Code code={`$ contractual init --dir services/payments
+
+Scanning for contract specs in services/payments...
+
+  Detected specs
+  ✔  openapi    services/payments/openapi.yaml
+
+Created contractual.yaml
+Created .contractual/
+Wrote snapshots for 1 contract(s)`} lang="ansi" title="Terminal" />
+
+### JSON output for scripting
+
+<Code code={`$ contractual init --format json
+{
+  "status": "ok",
+  "contracts": [
+    { "type": "openapi",     "path": "api/openapi.yaml" },
+    { "type": "json-schema", "path": "schemas/user.schema.json" }
+  ],
+  "created": ["contractual.yaml", ".contractual/"]
+}`} lang="json" title="Terminal" />
+
+## Exit Codes
+
+| Code | Meaning |
+|---|---|
+| `0` | Init completed successfully. |
+| `2` | Configuration error — e.g. `contractual.yaml` already exists, directory not found, or a spec file could not be parsed. |
+
+## See Also
+
+- [Configuration Schema](/reference/configuration) — full reference for `contractual.yaml` fields.
+- [Quick Start: CLI](/getting-started/quickstart-cli) — end-to-end walkthrough using `init`.
+- [`contractual status`](/reference/cli/status) — check versions and pending changesets after init.

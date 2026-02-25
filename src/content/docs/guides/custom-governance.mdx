@@ -1,0 +1,185 @@
+---
+title: Custom Linters & Differs
+description: How to bring your own linting and breaking change detection tools to Contractual using custom command overrides.
+---
+
+import { Tabs, TabItem, Aside } from '@astrojs/starlight/components';
+
+Contractual ships with built-in defaults for every supported contract type. For most teams those defaults are the right starting point. This guide explains when you might want to override them and exactly how to do it.
+
+## When to use custom overrides vs defaults
+
+Use the built-in defaults when:
+
+- You have no existing linting or diffing workflow
+- You are using OpenAPI, JSON Schema, or AsyncAPI with standard tooling
+- You want zero configuration
+
+Override with a custom command when:
+
+- Your team already uses Spectral with custom rulesets and wants to keep them
+- You have an internal tool that produces linting output in a known format
+- You want to add flags or configuration that the default invocation does not expose
+- You want to disable lint or breaking change detection for a specific contract
+
+## Custom linter
+
+Override the linter for a contract using the `lint` field. The value is a shell command. Use `{spec}` as a placeholder — Contractual replaces it with the absolute path to the spec file before running the command.
+
+```yaml
+# yaml-language-server: $schema=https://contractual.dev/schema.json
+
+contracts:
+  - name: orders-api
+    type: openapi
+    spec: ./specs/orders.openapi.yaml
+    lint: "spectral lint {spec} --format json"
+```
+
+The command runs in the directory containing `contractual.yaml`. Standard output is captured and parsed. Standard error is displayed in the CLI output if the command fails.
+
+## Custom differ
+
+Override breaking change detection using the `breaking` field. Use `{old}` for the snapshot path (the baseline) and `{new}` for the current spec path.
+
+```yaml
+# yaml-language-server: $schema=https://contractual.dev/schema.json
+
+contracts:
+  - name: orders-api
+    type: openapi
+    spec: ./specs/orders.openapi.yaml
+    breaking: "my-custom-differ breaking {old} {new} --format json"
+```
+
+Both `{old}` and `{new}` are absolute paths. The command must exit with code 0 if no breaking changes are found, and a non-zero code if breaking changes are found.
+
+## Placeholder reference
+
+All command fields support the following placeholders:
+
+| Placeholder | Replaced with | Available in |
+|---|---|---|
+| `{spec}` | Absolute path to the current spec file | `lint`, `outputs[].command` |
+| `{old}` | Absolute path to the snapshot (baseline) spec | `breaking` |
+| `{new}` | Absolute path to the current spec file | `breaking` |
+| `{name}` | The contract's `name` value | `lint`, `breaking`, `outputs[].command` |
+| `{version}` | The contract's current semver version from `versions.json` | `outputs[].command` |
+
+`{old}` and `{new}` are equivalent to snapshot and spec respectively.
+
+## Output format expectations
+
+Contractual runs your custom command and inspects two things:
+
+**Exit code** — zero means pass, non-zero means failure. This is the primary signal.
+
+**Standard output** — Contractual attempts to parse the output to extract structured information for PR comments and changeset generation. For the best results, use `--format json` with tools that support it. Contractual understands the JSON output formats of:
+
+- Spectral (`spectral lint --format json`)
+- Vacuum (`vacuum lint --format json`)
+
+If your command produces output in an unrecognized format, Contractual falls back to treating the raw output as a text message — still captured and surfaced in CLI output, but without structured change detection.
+
+<Aside type="note">
+For breaking change detection specifically, Contractual requires structured output to generate accurate changeset files. If your custom differ does not produce a recognized JSON format, Contractual generates a changeset with an "unknown" classification that requires manual review.
+</Aside>
+
+## Disabling lint or breaking change detection
+
+Set `lint: false` or `breaking: false` to skip the step entirely for a contract.
+
+```yaml
+# yaml-language-server: $schema=https://contractual.dev/schema.json
+
+contracts:
+  - name: order-schema
+    type: json-schema
+    spec: ./schemas/order.schema.json
+    lint: false      # Skip linting — schema is validated elsewhere in CI
+
+  - name: internal-config
+    type: json-schema
+    spec: ./config/internal.schema.json
+    breaking: false  # Internal schema — consumers are all in this repo, no breaking change tracking needed
+```
+
+Setting a field to `false` is different from omitting it. Omitting uses the built-in default. `false` explicitly opts out.
+
+## Examples
+
+### Spectral with a custom ruleset
+
+```yaml
+# yaml-language-server: $schema=https://contractual.dev/schema.json
+
+contracts:
+  - name: orders-api
+    type: openapi
+    spec: ./specs/orders.openapi.yaml
+    lint: "spectral lint {spec} --ruleset .spectral.yaml --format json"
+```
+
+Your `.spectral.yaml` ruleset applies alongside Contractual's breaking change detection. Spectral handles style and compliance; Contractual handles versioning and diffs.
+
+### Vacuum
+
+[Vacuum](https://github.com/daveshanley/vacuum) is a fast Spectral-compatible linter:
+
+```yaml
+# yaml-language-server: $schema=https://contractual.dev/schema.json
+
+contracts:
+  - name: orders-api
+    type: openapi
+    spec: ./specs/orders.openapi.yaml
+    lint: "vacuum lint {spec} --format json"
+```
+
+### Custom Python validation script
+
+For contracts with a custom validation script — for example, a Python tool that enforces internal naming conventions:
+
+```yaml
+# yaml-language-server: $schema=https://contractual.dev/schema.json
+
+contracts:
+  - name: order-schema
+    type: json-schema
+    spec: ./schemas/order.schema.json
+    lint: "python scripts/validate_schema.py {spec}"
+```
+
+The script must exit with code 0 on success and a non-zero code on failure. Any messages written to standard output are captured and displayed.
+
+```python
+# scripts/validate_schema.py
+import sys
+import json
+
+spec_path = sys.argv[1]
+
+with open(spec_path) as f:
+    schema = json.load(f)
+
+errors = []
+
+# Example: enforce that all properties have descriptions
+for prop_name, prop_def in schema.get("properties", {}).items():
+    if "description" not in prop_def:
+        errors.append(f"Property '{prop_name}' is missing a description")
+
+if errors:
+    for error in errors:
+        print(f"ERROR: {error}")
+    sys.exit(1)
+
+print("OK")
+sys.exit(0)
+```
+
+## Next steps
+
+- [Configuration](/guides/configuration) — full `contractual.yaml` reference including all governance fields
+- [GitHub Action Setup](/guides/github-action) — run custom linters in CI with the Action
+- [Change Classifications](/reference/change-classifications) — how Contractual classifies detected changes into major, minor, and patch

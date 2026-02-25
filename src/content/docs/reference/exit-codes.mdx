@@ -1,0 +1,52 @@
+---
+title: Exit Codes
+description: Reference for Contractual CLI exit codes and what each code means.
+---
+
+Every Contractual command exits with a numeric code that CI systems and shell scripts can act on.
+
+| Code | Meaning | Commands |
+|------|---------|----------|
+| `0` | Success — no errors, no violations | All |
+| `1` | Enforcement failure — breaking changes detected or lint errors found | `lint`, `breaking`, `status` |
+| `2` | Configuration error — `contractual.yaml` missing, invalid, or references a spec file that does not exist | All |
+| `3` | Tool execution error — the underlying linter or differ process failed (non-zero exit, unexpected output format, or binary not found) | `lint`, `breaking` |
+
+## Using exit codes in shell scripts
+
+```bash
+contractual breaking
+RESULT=$?
+
+if [ $RESULT -eq 1 ]; then
+  echo "Breaking changes detected — create a changeset before merging"
+  exit 1
+elif [ $RESULT -eq 2 ]; then
+  echo "Configuration error — check contractual.yaml"
+  exit 1
+elif [ $RESULT -eq 3 ]; then
+  echo "Linter or differ failed — check tool installation"
+  exit 1
+fi
+```
+
+## In CI
+
+The GitHub Action maps exit codes to workflow step outcomes automatically. If you run Contractual directly in a `run:` step, the non-zero exit code will fail the step unless you set `continue-on-error: true`.
+
+```yaml
+- name: Check for breaking changes
+  run: contractual breaking
+  continue-on-error: true
+  id: breaking
+
+- name: Comment on PR
+  if: steps.breaking.outcome == 'failure'
+  run: echo "Breaking changes found — see contractual output above"
+```
+
+## See also
+
+- [CLI Commands — breaking](/reference/cli/breaking)
+- [CLI Commands — lint](/reference/cli/lint)
+- [CLI Commands — status](/reference/cli/status)

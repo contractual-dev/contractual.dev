@@ -1,0 +1,345 @@
+---
+title: Troubleshooting
+description: Diagnose and fix common Contractual errors — from installation problems to CI permission failures and malformed changeset files.
+---
+
+import { Aside, Tabs, TabItem } from '@astrojs/starlight/components';
+
+This page covers the errors you are most likely to encounter and how to fix them. Start with [Debug mode](#debug-mode--verbose-output) if you are not sure what is going wrong.
+
+## Debug mode / verbose output
+
+Run any Contractual command with the `--verbose` flag to see the full command expansion, file paths, and internal decision log:
+
+```bash
+contractual lint --verbose
+contractual breaking --verbose
+contractual version --verbose
+```
+
+Example verbose output from `contractual breaking --verbose`:
+
+```
+[contractual] Config loaded from: /home/user/my-api/contractual.yaml
+[contractual] Contract: orders-api
+[contractual]   Spec:     /home/user/my-api/specs/orders.openapi.yaml
+[contractual]   Snapshot: /home/user/my-api/.contractual/snapshots/orders-api/1.2.0.yaml
+[contractual] Breaking change detection completed with code 0
+[contractual] No breaking changes detected for orders-api
+```
+
+The verbose log shows you exactly what command is being run, what files are being compared, and what exit code the tool returned. This is the fastest way to diagnose custom command failures.
+
+---
+
+## Custom command failures
+
+**Error message:**
+
+```
+Error: Output command failed for orders-api (typescript-client)
+Command: orval --config orval.config.ts
+Exit code: 1
+```
+
+Or for a custom linter:
+
+```
+Error: Lint command failed for orders-api
+Command: spectral lint {spec} --format json
+Exit code: 1
+```
+
+**Cause:** The custom command exited with a non-zero code. This could be a genuine lint or generation failure, or a configuration problem.
+
+**Diagnosis steps:**
+
+1. Run the command manually with `--verbose` to see the expanded command:
+
+   ```bash
+   contractual lint --verbose
+   ```
+
+   The verbose log shows the exact command with all placeholders replaced.
+
+2. Copy the expanded command and run it directly to see the full error output:
+
+   ```bash
+   spectral lint ./specs/orders.openapi.yaml --format json
+   ```
+
+3. Check that the tool is installed and on `PATH`:
+
+   ```bash
+   which spectral
+   which orval
+   ```
+
+4. Verify the placeholder is expanding correctly. `{spec}` becomes the absolute path to the spec file. `{old}` and `{new}` become absolute paths to the snapshot and current spec respectively.
+
+**Common causes:**
+
+| Symptom | Likely cause |
+|---|---|
+| `command not found` | Tool not installed or not on `PATH` |
+| File not found in tool output | Relative path in command — use `{spec}` instead |
+| Tool reports schema errors | Spec itself is invalid — fix the spec |
+| Command works locally but fails in CI | Dependency not installed in CI environment |
+
+---
+
+## GitHub Action permission errors
+
+**Error message:**
+
+```
+Error: Resource not accessible by integration
+```
+
+Or:
+
+```
+HttpError: Resource not accessible by integration
+  at /home/runner/.../github-action/dist/index.js
+```
+
+**Cause:** The GitHub Action does not have the permissions it needs to post comments or commit changesets.
+
+**Fix:** Add explicit permissions to your workflow file:
+
+```yaml
+permissions:
+  contents: write       # Commit changesets to the branch; commit version bumps
+  pull-requests: write  # Post PR comments; open the Version Contracts PR
+```
+
+Add these at the workflow level (applies to all jobs) or the job level (applies to that job only). If your repository has its default token permissions set to read-only (a common security hardening practice), you must set them explicitly in every workflow.
+
+<Aside type="caution">
+If you set permissions at the workflow level and also at the job level, the job-level permissions override the workflow-level ones. Do not set restrictive permissions at the workflow level and then expect job-level additions to work.
+</Aside>
+
+**Verify your repository default permissions:**
+
+Go to **Settings** → **Actions** → **General** → **Workflow permissions**. If it is set to "Read repository contents and packages permissions", your workflows must declare `contents: write` explicitly.
+
+**For fork PRs:**
+
+GitHub restricts write permissions for pull requests from forks. See the [GitHub Action Setup guide](/guides/github-action#forked-pr-limitations) for the available options.
+
+---
+
+## "No changesets found" warning
+
+**Warning message:**
+
+```
+Warning: No changesets found in .contractual/changesets/
+Nothing to release.
+```
+
+**Cause:** `contractual version` or the GitHub Action release mode ran but found no changeset files. This is not an error — it means there is nothing to release yet.
+
+**This is expected when:**
+
+- No spec changes have merged since the last release
+- The `.contractual/changesets/` directory is empty
+- The release workflow triggered but no changesets accumulated
+
+**This is unexpected when you just merged a spec change:**
+
+1. Check that the PR check workflow ran on the PR that introduced the spec change. If the Action was not configured on that PR, no changeset was generated.
+
+2. Check that the changeset file was actually committed to the branch and merged. Look at the merge commit:
+
+   ```bash
+   git log --oneline --name-only -5
+   ```
+
+3. Check that the `paths` filter on your release workflow includes `.contractual/changesets/**`:
+
+   ```yaml
+   on:
+     push:
+       branches:
+         - main
+       paths:
+         - '.contractual/changesets/**'   # This must match the changeset files
+   ```
+
+   If the `paths` filter does not match the changeset files that merged, the release workflow never triggers.
+
+---
+
+## Changeset format errors
+
+**Error message:**
+
+```
+Error: Failed to parse changeset file: .contractual/changesets/brave-wolf-leaps.md
+Expected YAML frontmatter with at least one contract name key.
+```
+
+**Cause:** The changeset file has malformed frontmatter.
+
+**Valid format:**
+
+```markdown
+---
+"orders-api": major
+---
+
+Description of the change. This text appears in the CHANGELOG.
+```
+
+**Common mistakes:**
+
+| Mistake | Correct form |
+|---|---|
+| `orders-api: major` (no quotes) | `"orders-api": major` |
+| `bump: major` | `"orders-api": major` — the key must be the contract name |
+| Missing frontmatter delimiters (`---`) | Must have `---` on its own line above and below the frontmatter |
+| Invalid bump level | Must be `major`, `minor`, or `patch` — case-sensitive |
+
+**Verify the format:**
+
+```bash
+cat .contractual/changesets/brave-wolf-leaps.md
+```
+
+Valid output:
+
+```
+---
+"orders-api": major
+---
+
+Changed pagination model from offset-based to cursor-based.
+```
+
+---
+
+## Spec file not found
+
+**Error message:**
+
+```
+Error: Spec file not found: ./specs/orders.openapi.yaml
+Checked: /home/user/my-api/specs/orders.openapi.yaml
+```
+
+**Cause:** The `spec` path in `contractual.yaml` does not resolve to an existing file.
+
+**Fix:**
+
+1. Check that the file exists at the path shown in "Checked":
+
+   ```bash
+   ls /home/user/my-api/specs/orders.openapi.yaml
+   ```
+
+2. Verify the path in `contractual.yaml` is relative to the location of `contractual.yaml`, not to the directory where you run the command:
+
+   ```yaml
+   contracts:
+     - name: orders-api
+       spec: ./specs/orders.openapi.yaml   # Relative to contractual.yaml's directory
+   ```
+
+3. Check the file extension. If your spec is `orders.yaml` but the path says `orders.openapi.yaml`, Contractual cannot find it.
+
+4. If you moved `contractual.yaml` to a subdirectory, update all spec paths accordingly or use the `--config` flag to point at the config file explicitly:
+
+   ```bash
+   contractual lint --config ./api/contractual.yaml
+   ```
+
+---
+
+## Version mismatch issues
+
+**Symptom:** `contractual breaking` compares against the wrong snapshot, or reports unexpected breaking changes on a spec that has not changed.
+
+**Cause:** The version in `.contractual/versions.json` does not match the snapshot files in `.contractual/snapshots/{name}/`.
+
+**Diagnosis:**
+
+```bash
+contractual status
+```
+
+Look at the output for each contract:
+
+```
+Contract status:
+
+  orders-api    2.3.1   specs/orders.openapi.yaml   ✗ snapshot missing for 2.3.1
+```
+
+This means `versions.json` says the contract is at `2.3.1` but `.contractual/snapshots/orders-api/2.3.1.yaml` does not exist.
+
+**Fix options:**
+
+**Option A:** Create the missing snapshot manually by copying the current spec:
+
+```bash
+cp specs/orders.openapi.yaml .contractual/snapshots/orders-api/2.3.1.yaml
+```
+
+Use this option when you know the current spec is the correct state for version 2.3.1.
+
+**Option B:** Find the correct spec state from git history:
+
+```bash
+git log --oneline -- specs/orders.openapi.yaml
+# Find the commit that corresponds to when 2.3.1 was the correct version
+git show <commit-hash>:specs/orders.openapi.yaml > .contractual/snapshots/orders-api/2.3.1.yaml
+```
+
+**Option C:** Reset to a new baseline version:
+
+```bash
+# Update versions.json to the next version
+# Copy current spec as the snapshot for that version
+echo '{"orders-api": "3.0.0"}' > .contractual/versions.json
+cp specs/orders.openapi.yaml .contractual/snapshots/orders-api/3.0.0.yaml
+```
+
+<Aside type="caution">
+Never edit a snapshot file after it has been committed and used as a baseline. Editing a snapshot changes what "breaking" means for all future comparisons against it. If a snapshot is incorrect, advance to a new version with a corrected snapshot instead.
+</Aside>
+
+---
+
+## Snapshot not created after `contractual version`
+
+**Symptom:** After running `contractual version` successfully, the snapshot directory for the new version is empty or missing.
+
+**Cause:** `contractual version` writes snapshots only when it consumes changesets. If no changesets were found, no version bump and no snapshot occurs.
+
+Check whether changesets were consumed:
+
+```bash
+ls .contractual/changesets/
+```
+
+If the directory is empty, `contractual version` had nothing to consume. Create a changeset first:
+
+```bash
+contractual changeset --contract orders-api --bump patch --message "Baseline snapshot"
+contractual version
+```
+
+---
+
+## Getting further help
+
+If none of the above resolves your issue:
+
+1. Run the failing command with `--verbose` and collect the full output.
+2. Check the [GitHub Issues](https://github.com/contractual-dev/contractual/issues) to see if the problem is known.
+3. Open a new issue with the verbose output, your `contractual.yaml` (redacted of any secrets), and the Contractual version (`contractual --version`).
+
+```bash
+contractual --version
+```

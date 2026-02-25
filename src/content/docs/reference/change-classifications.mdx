@@ -1,0 +1,166 @@
+---
+title: Change Classifications
+description: Authoritative reference for how Contractual classifies every structural change — what is breaking, non-breaking, and patch across JSON Schema and OpenAPI.
+---
+
+import { Aside, Tabs, TabItem } from '@astrojs/starlight/components';
+
+When Contractual detects a structural difference between a spec and its previous snapshot, it classifies the change into one of three categories:
+
+- **Breaking (major)** — Existing consumers may fail. Requires a major version bump.
+- **Non-breaking (minor)** — Backward-compatible addition or relaxation. Requires a minor version bump.
+- **Patch** — Metadata-only change with no behavioral effect. Requires a patch version bump.
+
+Classifications map directly to [semver](https://semver.org/) bumps.
+
+---
+
+## JSON Schema classifications
+
+Contractual's built-in structural differ walks two JSON Schema documents recursively and applies these rules to every field comparison.
+
+### Breaking changes (major)
+
+| Classification | Description | Example |
+|---------------|-------------|---------|
+| `field-removed` | A property present in the old schema is absent in the new schema | `"email"` property deleted from object |
+| `required-added` | A property has been added to the `required` array | `"userId"` added to `required` |
+| `type-changed` | The `type` of a field has changed to an incompatible type | `"string"` changed to `"integer"` |
+| `type-narrowed` | A field that previously accepted multiple types now accepts fewer | `["string", "null"]` changed to `"string"` |
+| `enum-value-removed` | A value has been removed from an `enum` array | `"active"` removed from status enum |
+| `constraint-tightened` | A numeric or string constraint has become more restrictive | `maxLength: 255` changed to `maxLength: 50`; `minimum: 0` changed to `minimum: 1` |
+| `additional-properties-denied` | `additionalProperties` changed from `true` or absent to `false` | Object can no longer accept unknown fields |
+| `format-changed` | The `format` keyword changed to a more restrictive or incompatible value | `"date-time"` changed to `"date"` |
+| `required-field-added` | A new required property was added to the schema | New `"taxId"` field added and marked required |
+
+### Non-breaking changes (minor)
+
+| Classification | Description | Example |
+|---------------|-------------|---------|
+| `optional-field-added` | A new property was added but is not in the `required` array | New `"nickname"` optional field |
+| `enum-value-added` | A new value was added to an `enum` array | `"pending"` added to status enum |
+| `constraint-loosened` | A numeric or string constraint has become less restrictive | `maxLength: 50` changed to `maxLength: 255` |
+| `additional-properties-allowed` | `additionalProperties` changed from `false` to `true` or removed | Object now accepts unknown fields |
+| `new-definition` | A new entry was added to `$defs` or `definitions` without being referenced | New reusable `AddressSchema` definition |
+| `type-widened` | A field now accepts more types than before | `"string"` changed to `["string", "null"]` |
+
+### Patch changes
+
+| Classification | Description | Example |
+|---------------|-------------|---------|
+| `description-changed` | The `description` keyword value changed | Typo fixed in field description |
+| `title-changed` | The `title` keyword value changed | Field title updated for clarity |
+| `examples-changed` | The `examples` or `example` keyword changed | New example values added |
+| `comment-changed` | The `$comment` keyword value changed | Internal annotation updated |
+| `default-changed` | The `default` keyword value changed when the type is unchanged | Default value updated |
+
+<Aside type="note">
+`default-changed` is classified as patch because the structural contract — what values the schema accepts — does not change. If the type also changes, the classification escalates to `type-changed` (breaking).
+</Aside>
+
+---
+
+## OpenAPI classifications
+
+Contractual's built-in OpenAPI differ analyzes the structure of two OpenAPI specifications and applies semantic versioning rules to classify changes.
+
+### OpenAPI breaking changes (major)
+
+The following changes are classified as **breaking (major)**:
+
+- Removing an endpoint (`DELETE /orders/{id}` no longer exists)
+- Changing an HTTP method (`POST /orders` changed to `PUT /orders`)
+- Removing a required request body field
+- Adding a required request body field with no default
+- Removing a response field consumers depend on
+- Changing the type of a request or response field
+- Removing a supported content type (`application/json` removed)
+- Tightening a path, query, or header parameter constraint
+- Changing authentication scheme from optional to required
+- Removing a path parameter
+
+### OpenAPI non-breaking changes (minor)
+
+- Adding a new endpoint
+- Adding an optional request body field
+- Adding a new response field
+- Adding a new content type
+- Loosening a parameter constraint
+- Adding a new query parameter (non-required)
+
+### OpenAPI patch changes (informational)
+
+- Description or summary changes on operations, parameters, or fields
+- Example value changes
+- Deprecation markers added (these are informational — consumers still work)
+- `x-` extension field changes
+
+<Aside type="note">
+The built-in OpenAPI differ follows semantic versioning principles and common REST API evolution patterns. For custom classification rules, you can configure a custom differ command in `contractual.yaml`.
+</Aside>
+
+---
+
+## How classifications map to semver bumps
+
+When a contract has multiple changes across categories, Contractual applies the **highest** classification:
+
+| Highest classification in changeset | Version bump |
+|-------------------------------------|-------------|
+| Any breaking change | `major` (1.2.3 → 2.0.0) |
+| Non-breaking, no breaking | `minor` (1.2.3 → 1.3.0) |
+| Patch only | `patch` (1.2.3 → 1.2.4) |
+
+If a single PR touches a contract with both breaking and non-breaking changes, the changeset is classified as `major`. The minor changes are documented in the changelog but do not prevent the major bump.
+
+When multiple changesets exist for the same contract (accumulated across several merged PRs), `contractual version` aggregates them and applies the highest bump across all changesets before resetting.
+
+---
+
+## The "unknown" category
+
+Some schema constructs cannot be classified deterministically. Contractual marks these as **unknown** and flags them for manual review.
+
+Constructs that produce `unknown` classifications:
+
+- `anyOf` / `oneOf` / `allOf` compositions where the set of matching schemas changes
+- `$ref` cycles or external references that cannot be resolved at diff time
+- `if` / `then` / `else` conditional schemas
+- Custom vocabularies and `$vocabulary` declarations
+
+When a change is marked `unknown`:
+
+1. The `breaking` command exits with code `1` (treated conservatively as potentially breaking)
+2. The auto-generated changeset sets the classification to `major` as a safe default
+3. The changeset body includes a note explaining which construct triggered the unknown classification
+
+You can override the classification by editing the changeset file before merging.
+
+---
+
+## Overriding auto-detected classifications
+
+Auto-detection is right most of the time but not always. A field removal might be intentional and already communicated to all consumers. A required field addition might be in a section only your internal tooling reads.
+
+To override a classification, edit the changeset frontmatter directly:
+
+```markdown
+---
+"orders-api": minor
+---
+
+The `legacy_id` field was removed but has been deprecated for 6 months
+and no active consumers depend on it per our usage analytics.
+```
+
+Contractual uses whatever classification is in the file — it does not re-run detection at version time. The override is permanent for that changeset.
+
+See [Changeset File Format](/reference/changeset-format) for the full frontmatter specification.
+
+---
+
+## See also
+
+- [Concept: Breaking Change Detection](/concepts/breaking-changes) — How the JSON Schema structural differ works internally
+- [Concept: The Changeset Model](/concepts/changesets) — How classifications feed into the version workflow
+- [Changeset File Format](/reference/changeset-format) — How to create and edit changeset files

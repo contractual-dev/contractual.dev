@@ -1,0 +1,111 @@
+---
+title: Installation
+description: Install the Contractual CLI globally or as a project dev dependency using npm, pnpm, yarn, or bun.
+---
+
+import { Tabs, TabItem, Aside, LinkCard } from '@astrojs/starlight/components';
+
+## Global install
+
+Install Contractual globally to run `contractual` from anywhere in your terminal. This is the fastest way to get started.
+
+<Tabs syncKey="pkg">
+  <TabItem label="npm">
+    ```bash
+    npm install -g contractual
+    ```
+  </TabItem>
+  <TabItem label="pnpm">
+    ```bash
+    pnpm add -g contractual
+    ```
+  </TabItem>
+  <TabItem label="yarn">
+    ```bash
+    yarn global add contractual
+    ```
+  </TabItem>
+  <TabItem label="bun">
+    ```bash
+    bun add -g contractual
+    ```
+  </TabItem>
+</Tabs>
+
+## Project install (recommended for teams)
+
+Install as a dev dependency so every contributor on the project uses the same version. Add the `contractual` binary to your `package.json` scripts or run it via your package manager's `exec` command.
+
+<Tabs syncKey="pkg">
+  <TabItem label="npm">
+    ```bash
+    npm install --save-dev contractual
+    ```
+  </TabItem>
+  <TabItem label="pnpm">
+    ```bash
+    pnpm add -D contractual
+    ```
+  </TabItem>
+  <TabItem label="yarn">
+    ```bash
+    yarn add --dev contractual
+    ```
+  </TabItem>
+  <TabItem label="bun">
+    ```bash
+    bun add -d contractual
+    ```
+  </TabItem>
+</Tabs>
+
+When installed locally, run commands with your package manager's exec:
+
+<Tabs syncKey="pkg">
+  <TabItem label="npm">
+    ```bash
+    npx contractual breaking
+    ```
+  </TabItem>
+  <TabItem label="pnpm">
+    ```bash
+    pnpm contractual breaking
+    ```
+  </TabItem>
+  <TabItem label="yarn">
+    ```bash
+    yarn contractual breaking
+    ```
+  </TabItem>
+  <TabItem label="bun">
+    ```bash
+    bunx contractual breaking
+    ```
+  </TabItem>
+</Tabs>
+
+## Verify the installation
+
+```bash
+contractual --version
+```
+
+You should see output like:
+
+```
+contractual/0.1.0 darwin-arm64 node-v22.0.0
+```
+
+If the command is not found after a global install, make sure your package manager's global bin directory is on your `PATH`. Running `npm config get prefix` (or the equivalent for your package manager) shows where global binaries are installed.
+
+
+## Requirements
+
+- Node.js 18 or later
+- Git (required for snapshot diffing)
+
+<LinkCard
+  title="Next: Quick Start CLI"
+  description="Zero to first working contractual breaking in 5 minutes."
+  href="/getting-started/quickstart-cli"
+/>

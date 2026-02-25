@@ -1,0 +1,777 @@
+/* ==========================================================================
+   Contractual Custom Styles
+   Prisma-inspired design system with Contractual color palette
+   ========================================================================== */
+
+/* --------------------------------------------------------------------------
+   CSS Custom Properties / Design Tokens
+   -------------------------------------------------------------------------- */
+:root {
+  /* Contractual brand colors (indigo) */
+  --sl-color-accent-low: #3730a3;
+  --sl-color-accent: #6366f1;
+  --sl-color-accent-high: #a5b4fc;
+
+  /* Severity colors */
+  --color-breaking: #ef4444;
+  --color-minor: #eab308;
+  --color-patch: #22c55e;
+
+  /* Extended palette */
+  --color-bg-base: #0a0f1e;
+  --color-bg-elevated: #0d1424;
+  --color-bg-surface: #111827;
+  --color-bg-code: #0d1117;
+
+  --color-border-subtle: rgba(255, 255, 255, 0.06);
+  --color-border-default: rgba(255, 255, 255, 0.08);
+  --color-border-accent: rgba(99, 102, 241, 0.2);
+
+  --color-text-primary: #f8fafc;
+  --color-text-secondary: #e2e8f0;
+  --color-text-muted: #94a3b8;
+  --color-text-dim: #64748b;
+  --color-text-faint: #475569;
+
+  /* Spacing scale (Prisma-style generous spacing) */
+  --space-xs: 0.25rem;   /* 4px */
+  --space-sm: 0.5rem;    /* 8px */
+  --space-md: 1rem;      /* 16px */
+  --space-lg: 1.5rem;    /* 24px */
+  --space-xl: 2rem;      /* 32px */
+  --space-2xl: 3rem;     /* 48px */
+  --space-3xl: 4rem;     /* 64px */
+  --space-4xl: 6rem;     /* 96px */
+  --space-section: 7.5rem; /* 120px - Prisma section spacing */
+
+  /* Border radius */
+  --radius-sm: 0.25rem;  /* 4px */
+  --radius-md: 0.5rem;   /* 8px */
+  --radius-lg: 0.75rem;  /* 12px */
+  --radius-xl: 1rem;     /* 16px */
+  --radius-full: 9999px;
+
+  /* Typography */
+  --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  --font-heading: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  --font-mono: 'SF Mono', 'Cascadia Code', 'Fira Code', Consolas, monospace;
+
+  /* Shadows (Prisma-style subtle elevation) */
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3);
+  --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.4);
+  --shadow-lg: 0 12px 32px rgba(0, 0, 0, 0.5);
+  --shadow-xl: 0 24px 48px rgba(0, 0, 0, 0.6);
+  --shadow-glow: 0 0 40px rgba(99, 102, 241, 0.15);
+
+  /* Transitions */
+  --transition-fast: 0.15s ease;
+  --transition-base: 0.2s ease;
+  --transition-slow: 0.3s ease;
+}
+
+[data-theme='dark'] {
+  --sl-color-accent-low: #4338ca;
+  --sl-color-accent: #818cf8;
+  --sl-color-accent-high: #c7d2fe;
+}
+
+/* --------------------------------------------------------------------------
+   Typography - Inter font loading
+   -------------------------------------------------------------------------- */
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
+  src: url('https://fonts.gstatic.com/s/inter/v18/UcCO3FwrK3iLTeHuS_nVMrMxCp50SjIw2boKoduKmMEVuLyfAZ9hiJ-Ek-_EeA.woff2') format('woff2');
+}
+
+/* --------------------------------------------------------------------------
+   Base Starlight Overrides
+   -------------------------------------------------------------------------- */
+
+/* Wider content area */
+.sl-markdown-content {
+  max-width: 52rem;
+}
+
+[data-has-sidebar] .main-frame {
+  max-width: 100%;
+}
+
+.main-pane {
+  --sl-content-margin-inline: var(--space-xl);
+}
+
+/* Right sidebar (TOC) */
+.right-sidebar,
+.right-sidebar-panel {
+  width: 14rem;
+}
+
+/* --------------------------------------------------------------------------
+   Sidebar Styling (Prisma-inspired tree navigation)
+   -------------------------------------------------------------------------- */
+starlight-menu-button + nav {
+  font-size: 0.875rem;
+}
+
+/* Sidebar group labels */
+.sidebar-content .top-level > li > details > summary,
+.sidebar-content .top-level > li > a {
+  font-weight: 600;
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--color-text-dim);
+  padding: var(--space-sm) 0;
+  margin-top: var(--space-md);
+}
+
+.sidebar-content .top-level > li:first-child > details > summary,
+.sidebar-content .top-level > li:first-child > a {
+  margin-top: 0;
+}
+
+/* Sidebar links */
+.sidebar-content a {
+  font-size: 0.875rem;
+  color: var(--color-text-muted);
+  padding: var(--space-xs) var(--space-sm);
+  border-radius: var(--radius-md);
+  transition: all var(--transition-fast);
+  border-left: 2px solid transparent;
+  margin-left: calc(-1 * var(--space-sm));
+  padding-left: calc(var(--space-sm) + 2px);
+}
+
+.sidebar-content a:hover {
+  color: var(--color-text-secondary);
+  background: rgba(99, 102, 241, 0.08);
+  border-left-color: rgba(99, 102, 241, 0.3);
+}
+
+.sidebar-content a[aria-current="page"] {
+  color: var(--sl-color-accent);
+  background: rgba(99, 102, 241, 0.12);
+  border-left-color: var(--sl-color-accent);
+  font-weight: 500;
+}
+
+/* Collapsible group styling */
+.sidebar-content details[open] > summary {
+  color: var(--color-text-secondary);
+}
+
+.sidebar-content summary::marker,
+.sidebar-content summary::-webkit-details-marker {
+  color: var(--color-text-faint);
+}
+
+/* --------------------------------------------------------------------------
+   Code Blocks (Prisma-style)
+   -------------------------------------------------------------------------- */
+pre:not(.terminal pre) {
+  background: var(--color-bg-code) !important;
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--radius-lg);
+  padding: var(--space-lg);
+  font-family: var(--font-mono);
+  font-size: 0.875rem;
+  line-height: 1.7;
+  overflow-x: auto;
+  box-shadow: var(--shadow-md);
+}
+
+code:not(pre code) {
+  font-family: var(--font-mono);
+  font-size: 0.88em;
+  background: rgba(99, 102, 241, 0.12);
+  color: var(--sl-color-accent-high);
+  padding: 0.15em 0.4em;
+  border-radius: var(--radius-sm);
+  font-weight: 500;
+}
+
+/* Code in headings */
+h1 code, h2 code, h3 code, h4 code {
+  font-size: 0.9em;
+  padding: 0.1em 0.35em;
+}
+
+/* --------------------------------------------------------------------------
+   Terminal / CLI Output Styling
+   -------------------------------------------------------------------------- */
+.terminal {
+  background: var(--color-bg-code);
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--radius-lg);
+  padding: var(--space-lg);
+  font-family: var(--font-mono);
+  font-size: 0.875rem;
+  line-height: 1.65;
+  overflow-x: auto;
+  box-shadow: var(--shadow-lg), var(--shadow-glow);
+}
+
+.terminal-header {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  margin-bottom: var(--space-md);
+  padding-bottom: var(--space-md);
+  border-bottom: 1px solid var(--color-border-subtle);
+}
+
+.terminal-dot {
+  width: 0.75rem;
+  height: 0.75rem;
+  border-radius: var(--radius-full);
+}
+
+.terminal-dot-red { background: #ff5f57; }
+.terminal-dot-yellow { background: #febc2e; }
+.terminal-dot-green { background: #28c840; }
+
+.terminal-content {
+  color: var(--color-text-secondary);
+}
+
+.terminal-prompt { color: var(--color-patch); }
+.terminal-command { color: var(--color-text-primary); }
+.terminal-breaking { color: #f87171; }
+.terminal-minor { color: #fbbf24; }
+.terminal-success { color: #4ade80; }
+
+/* --------------------------------------------------------------------------
+   Badge Styling (Prisma pill badges)
+   -------------------------------------------------------------------------- */
+.badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.2rem 0.6rem;
+  border-radius: var(--radius-full);
+  font-size: 0.7rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.badge-breaking {
+  background: rgba(239, 68, 68, 0.15);
+  color: #f87171;
+  border: 1px solid rgba(239, 68, 68, 0.25);
+}
+
+.badge-minor {
+  background: rgba(234, 179, 8, 0.15);
+  color: #fbbf24;
+  border: 1px solid rgba(234, 179, 8, 0.25);
+}
+
+.badge-patch {
+  background: rgba(34, 197, 94, 0.15);
+  color: #4ade80;
+  border: 1px solid rgba(34, 197, 94, 0.25);
+}
+
+.badge-ga {
+  background: rgba(34, 197, 94, 0.12);
+  color: #4ade80;
+  border: 1px solid rgba(34, 197, 94, 0.2);
+}
+
+.badge-coming {
+  background: rgba(99, 102, 241, 0.12);
+  color: #818cf8;
+  border: 1px solid rgba(99, 102, 241, 0.2);
+}
+
+/* --------------------------------------------------------------------------
+   Feature Grid (Prisma bento-style cards)
+   -------------------------------------------------------------------------- */
+.feature-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  gap: var(--space-lg);
+}
+
+.feature-card {
+  background: rgba(255, 255, 255, 0.02);
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--radius-xl);
+  padding: var(--space-xl);
+  transition: all var(--transition-base);
+}
+
+.feature-card:hover {
+  border-color: var(--color-border-accent);
+  background: rgba(99, 102, 241, 0.04);
+  transform: translateY(-2px);
+  box-shadow: var(--shadow-lg);
+}
+
+.feature-card h3 {
+  font-size: 1.1rem;
+  font-weight: 700;
+  margin: 0 0 var(--space-sm);
+  color: var(--color-text-primary);
+}
+
+.feature-card p {
+  font-size: 0.9rem;
+  color: var(--color-text-dim);
+  line-height: 1.7;
+  margin: 0;
+}
+
+/* --------------------------------------------------------------------------
+   Format Support Grid
+   -------------------------------------------------------------------------- */
+.format-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: var(--space-lg);
+}
+
+@media (max-width: 900px) {
+  .format-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+@media (max-width: 480px) {
+  .format-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.format-card {
+  text-align: center;
+  padding: var(--space-xl) var(--space-lg);
+  border-radius: var(--radius-xl);
+  border: 1px solid var(--color-border-default);
+  background: rgba(255, 255, 255, 0.02);
+  transition: all var(--transition-base);
+}
+
+.format-card:hover {
+  border-color: var(--color-border-accent);
+  transform: translateY(-2px);
+}
+
+/* --------------------------------------------------------------------------
+   Tables (Prisma-style)
+   -------------------------------------------------------------------------- */
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.9rem;
+  margin: var(--space-xl) 0;
+}
+
+th {
+  background: rgba(255, 255, 255, 0.03);
+  color: var(--color-text-dim);
+  font-weight: 600;
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  padding: var(--space-md) var(--space-lg);
+  text-align: left;
+  border-bottom: 1px solid var(--color-border-default);
+}
+
+td {
+  padding: var(--space-md) var(--space-lg);
+  color: var(--color-text-muted);
+  border-bottom: 1px solid var(--color-border-subtle);
+  vertical-align: middle;
+}
+
+tbody tr:hover {
+  background: rgba(99, 102, 241, 0.03);
+}
+
+tbody tr:last-child td {
+  border-bottom: none;
+}
+
+/* Classification table */
+.classification-table {
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+}
+
+/* --------------------------------------------------------------------------
+   Callout / Aside Boxes (Prisma-style)
+   -------------------------------------------------------------------------- */
+.starlight-aside {
+  border-radius: var(--radius-lg);
+  border-width: 1px;
+  border-left-width: 4px;
+  padding: var(--space-lg);
+  margin: var(--space-xl) 0;
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.starlight-aside--note {
+  border-color: rgba(99, 102, 241, 0.4);
+  border-left-color: var(--sl-color-accent);
+}
+
+.starlight-aside--tip {
+  border-color: rgba(34, 197, 94, 0.4);
+  border-left-color: var(--color-patch);
+}
+
+.starlight-aside--caution {
+  border-color: rgba(234, 179, 8, 0.4);
+  border-left-color: var(--color-minor);
+}
+
+.starlight-aside--danger {
+  border-color: rgba(239, 68, 68, 0.4);
+  border-left-color: var(--color-breaking);
+}
+
+.starlight-aside__title {
+  font-weight: 700;
+  font-size: 0.85rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-bottom: var(--space-sm);
+}
+
+/* --------------------------------------------------------------------------
+   Tabs (Prisma package manager tabs style)
+   -------------------------------------------------------------------------- */
+starlight-tabs {
+  margin: var(--space-xl) 0;
+}
+
+starlight-tabs [role="tablist"] {
+  display: flex;
+  gap: var(--space-xs);
+  background: rgba(255, 255, 255, 0.04);
+  border-radius: var(--radius-md) var(--radius-md) 0 0;
+  padding: var(--space-xs);
+  border: 1px solid var(--color-border-default);
+  border-bottom: none;
+}
+
+starlight-tabs [role="tab"] {
+  flex: 1;
+  padding: var(--space-sm) var(--space-md);
+  background: transparent;
+  border: none;
+  color: var(--color-text-faint);
+  font-size: 0.85rem;
+  font-weight: 500;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: all var(--transition-fast);
+}
+
+starlight-tabs [role="tab"]:hover {
+  color: var(--color-text-muted);
+}
+
+starlight-tabs [role="tab"][aria-selected="true"] {
+  background: rgba(99, 102, 241, 0.15);
+  color: var(--sl-color-accent-high);
+}
+
+starlight-tabs [role="tabpanel"] {
+  border: 1px solid var(--color-border-default);
+  border-radius: 0 0 var(--radius-md) var(--radius-md);
+  background: var(--color-bg-code);
+}
+
+starlight-tabs [role="tabpanel"] pre {
+  margin: 0;
+  border: none;
+  border-radius: 0 0 var(--radius-md) var(--radius-md);
+  box-shadow: none;
+}
+
+/* --------------------------------------------------------------------------
+   Headings
+   -------------------------------------------------------------------------- */
+.sl-markdown-content h1 {
+  font-size: 2.25rem;
+  font-weight: 800;
+  letter-spacing: -0.03em;
+  line-height: 1.2;
+  margin-top: 0;
+  margin-bottom: var(--space-xl);
+  color: var(--color-text-primary);
+}
+
+.sl-markdown-content h2 {
+  font-size: 1.5rem;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  line-height: 1.3;
+  margin-top: var(--space-3xl);
+  margin-bottom: var(--space-lg);
+  padding-top: var(--space-lg);
+  border-top: 1px solid var(--color-border-subtle);
+  color: var(--color-text-primary);
+}
+
+.sl-markdown-content h2:first-child {
+  margin-top: 0;
+  padding-top: 0;
+  border-top: none;
+}
+
+.sl-markdown-content h3 {
+  font-size: 1.2rem;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  line-height: 1.4;
+  margin-top: var(--space-2xl);
+  margin-bottom: var(--space-md);
+  color: var(--color-text-primary);
+}
+
+.sl-markdown-content h4 {
+  font-size: 1rem;
+  font-weight: 600;
+  line-height: 1.5;
+  margin-top: var(--space-xl);
+  margin-bottom: var(--space-sm);
+  color: var(--color-text-secondary);
+}
+
+/* Heading anchor links */
+.sl-markdown-content :is(h1, h2, h3, h4) a {
+  color: inherit;
+  text-decoration: none;
+}
+
+.sl-markdown-content :is(h1, h2, h3, h4):hover .anchor-link {
+  opacity: 1;
+}
+
+.anchor-link {
+  opacity: 0;
+  margin-left: var(--space-sm);
+  color: var(--sl-color-accent);
+  transition: opacity var(--transition-fast);
+}
+
+/* --------------------------------------------------------------------------
+   Links
+   -------------------------------------------------------------------------- */
+.sl-markdown-content a:not([class]) {
+  color: var(--sl-color-accent-high);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  text-decoration-color: rgba(165, 180, 252, 0.4);
+  transition: all var(--transition-fast);
+}
+
+.sl-markdown-content a:not([class]):hover {
+  color: #c7d2fe;
+  text-decoration-color: rgba(199, 210, 254, 0.6);
+}
+
+/* --------------------------------------------------------------------------
+   Lists
+   -------------------------------------------------------------------------- */
+.sl-markdown-content ul,
+.sl-markdown-content ol {
+  padding-left: var(--space-xl);
+  margin: var(--space-lg) 0;
+}
+
+.sl-markdown-content li {
+  margin: var(--space-sm) 0;
+  line-height: 1.7;
+  color: var(--color-text-muted);
+}
+
+.sl-markdown-content li::marker {
+  color: var(--sl-color-accent);
+}
+
+/* --------------------------------------------------------------------------
+   Blockquotes
+   -------------------------------------------------------------------------- */
+.sl-markdown-content blockquote {
+  border-left: 4px solid var(--sl-color-accent);
+  padding-left: var(--space-lg);
+  margin: var(--space-xl) 0;
+  color: var(--color-text-dim);
+  font-style: italic;
+}
+
+/* --------------------------------------------------------------------------
+   Mermaid Diagrams
+   -------------------------------------------------------------------------- */
+[data-rehype-mermaid] {
+  text-align: center;
+  margin: var(--space-2xl) 0;
+  padding: var(--space-xl);
+  background: rgba(255, 255, 255, 0.02);
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--radius-lg);
+}
+
+[data-rehype-mermaid] svg {
+  max-width: 100%;
+  height: auto;
+}
+
+/* --------------------------------------------------------------------------
+   Search (Pagefind)
+   -------------------------------------------------------------------------- */
+.pagefind-ui__search-input {
+  background: var(--color-bg-surface) !important;
+  border: 1px solid var(--color-border-default) !important;
+  border-radius: var(--radius-md) !important;
+  font-family: var(--font-sans) !important;
+}
+
+.pagefind-ui__search-input:focus {
+  border-color: var(--sl-color-accent) !important;
+  box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.15) !important;
+}
+
+/* --------------------------------------------------------------------------
+   Buttons (Prisma-style: solid colors, no gradients)
+   -------------------------------------------------------------------------- */
+.sl-markdown-content .action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0.75rem 1.5rem;
+  font-size: 0.95rem;
+  font-weight: 600;
+  border-radius: var(--radius-md);
+  text-decoration: none;
+  transition: background var(--transition-fast), transform var(--transition-fast);
+}
+
+.sl-markdown-content .action.primary {
+  background: #6366f1;
+  color: white;
+}
+
+.sl-markdown-content .action.primary:hover {
+  background: #5558e3;
+  transform: translateY(-1px);
+}
+
+.sl-markdown-content .action.secondary {
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--color-text-secondary);
+  border: 1px solid var(--color-border-default);
+}
+
+.sl-markdown-content .action.secondary:hover {
+  background: rgba(255, 255, 255, 0.08);
+  border-color: rgba(255, 255, 255, 0.2);
+}
+
+/* --------------------------------------------------------------------------
+   Page Navigation (Prev/Next)
+   -------------------------------------------------------------------------- */
+.pagination-links {
+  margin-top: var(--space-4xl);
+  padding-top: var(--space-xl);
+  border-top: 1px solid var(--color-border-subtle);
+}
+
+.pagination-links a {
+  padding: var(--space-lg);
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--radius-lg);
+  transition: all var(--transition-base);
+}
+
+.pagination-links a:hover {
+  border-color: var(--color-border-accent);
+  background: rgba(99, 102, 241, 0.04);
+}
+
+/* --------------------------------------------------------------------------
+   Edit Link
+   -------------------------------------------------------------------------- */
+.sl-markdown-content + .meta-container {
+  margin-top: var(--space-3xl);
+  padding-top: var(--space-lg);
+  border-top: 1px solid var(--color-border-subtle);
+}
+
+/* --------------------------------------------------------------------------
+   Landing Page Specific
+   -------------------------------------------------------------------------- */
+.landing-hero {
+  min-height: 85vh;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  padding: var(--space-4xl) var(--space-xl);
+}
+
+.landing-section {
+  padding: var(--space-section) var(--space-xl);
+  max-width: 1200px;
+  margin: 0 auto;
+}
+
+/* --------------------------------------------------------------------------
+   Scrollbar Styling
+   -------------------------------------------------------------------------- */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: var(--radius-full);
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.15);
+}
+
+/* --------------------------------------------------------------------------
+   Selection
+   -------------------------------------------------------------------------- */
+::selection {
+  background: rgba(99, 102, 241, 0.3);
+  color: white;
+}
+
+/* --------------------------------------------------------------------------
+   Focus States (Accessibility)
+   -------------------------------------------------------------------------- */
+:focus-visible {
+  outline: 2px solid var(--sl-color-accent);
+  outline-offset: 2px;
+}
+
+/* --------------------------------------------------------------------------
+   Print Styles
+   -------------------------------------------------------------------------- */
+@media print {
+  .sidebar-content,
+  .right-sidebar,
+  .pagination-links {
+    display: none;
+  }
+
+  .sl-markdown-content {
+    max-width: 100%;
+  }
+}

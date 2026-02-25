@@ -1,0 +1,103 @@
+---
+title: contractual lint
+description: Run configured linters against all registered contracts and report violations.
+---
+
+import { Code } from '@astrojs/starlight/components';
+
+Run linting rules against your contract specs and surface violations before they reach a snapshot or release.
+
+## Usage
+
+```sh
+contractual lint [--contract <name>] [--format <fmt>]
+```
+
+## Description
+
+`contractual lint` iterates over every contract registered in `contractual.yaml` and runs the appropriate linter for its type. Contractual ships with sensible built-in linter defaults for each supported spec format:
+
+| Spec type | Default linter |
+|---|---|
+| OpenAPI | `spectral lint` |
+| JSON Schema | Built-in schema validator |
+| AsyncAPI | `asyncapi validate` |
+| ODCS | Built-in ODCS validator |
+
+You can override any of these with a custom command via the `lint.command` field in `contractual.yaml`. See [Custom Linters and Differs](/guides/custom-governance) for details.
+
+Violations are reported with file path, rule name, severity, and line number. The command exits with code `1` if any error-level violations are found, so it integrates cleanly into CI pipelines.
+
+## Options
+
+| Flag | Description | Default |
+|---|---|---|
+| `--contract <name>` | Run lint only for the named contract. Repeat to target multiple contracts. | All contracts |
+| `--format <fmt>` | Output format. One of `text`, `json`. | `text` |
+
+## Examples
+
+### Lint all contracts
+
+<Code code={`$ contractual lint
+
+Linting contracts...
+
+  payments-api  (openapi)
+  ✖  [error]  oas3-api-servers  No servers defined  api/openapi.yaml:1
+  ✔  user-schema  (json-schema)  No violations
+
+1 contract(s) passed, 1 contract(s) have errors.`} lang="ansi" title="Terminal" />
+
+### Lint a single contract
+
+<Code code={`$ contractual lint --contract payments-api
+
+Linting payments-api...
+
+  ✖  [error]  oas3-api-servers  No servers defined  api/openapi.yaml:1
+  ✖  [warn]   operation-tags    Operation "GET /charges" has no tags  api/openapi.yaml:42
+
+2 violation(s) found (1 error, 1 warning).`} lang="ansi" title="Terminal" />
+
+### JSON output for CI reporting
+
+<Code code={`$ contractual lint --format json
+{
+  "contracts": [
+    {
+      "name": "payments-api",
+      "type": "openapi",
+      "violations": [
+        {
+          "rule": "oas3-api-servers",
+          "severity": "error",
+          "message": "No servers defined",
+          "path": "api/openapi.yaml",
+          "line": 1
+        }
+      ]
+    },
+    {
+      "name": "user-schema",
+      "type": "json-schema",
+      "violations": []
+    }
+  ],
+  "summary": { "passed": 1, "failed": 1, "total": 2 }
+}`} lang="json" title="Terminal" />
+
+## Exit Codes
+
+| Code | Meaning |
+|---|---|
+| `0` | All contracts passed linting with no error-level violations. |
+| `1` | One or more error-level lint violations were found. |
+| `2` | Configuration error — e.g. `contractual.yaml` not found or a contract name passed to `--contract` does not exist. |
+| `3` | Tool error — the configured linter binary was not found or exited unexpectedly. |
+
+## See Also
+
+- [Custom Linters and Differs](/guides/custom-governance) — configure or replace the default linter for any contract type.
+- [`contractual breaking`](/reference/cli/breaking) — detect breaking changes vs the last snapshot.
+- [Exit Codes](/reference/exit-codes) — full table of exit codes across all commands.

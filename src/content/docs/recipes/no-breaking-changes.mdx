@@ -1,0 +1,241 @@
+---
+title: Enforcing No Breaking Changes
+description: Configure Contractual to block breaking changes from merging, handle intentional exceptions with changeset overrides, and adopt a deprecation-first workflow.
+---
+
+import { Aside, Tabs, TabItem } from '@astrojs/starlight/components';
+
+Contractual can enforce a strict no-breaking-changes policy on your API contracts by failing the PR check whenever a breaking change is detected. This recipe explains how to set that up, how to handle the cases where you genuinely need a breaking change, and how to structure a deprecation-first workflow that avoids breaking consumers entirely.
+
+## The default behavior
+
+By default, the Contractual GitHub Action runs with `fail-on-breaking: true`. Any pull request that introduces a breaking change to a contract fails the required status check and cannot merge until one of these things happens:
+
+1. The breaking change is reverted
+2. A changeset override promotes the bump level intentionally (signaling the team has reviewed and accepted the break)
+
+This is the strictest mode and works well for public APIs where consumers cannot update immediately.
+
+## Setting up `fail-on-breaking: true` in CI
+
+```yaml
+# .github/workflows/contractual-pr.yml
+name: Contractual PR Check
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    paths:
+      - 'specs/**'
+      - 'schemas/**'
+      - 'contractual.yaml'
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  contractual-check:
+    name: Check contracts
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.head_ref }}
+
+      - name: Run Contractual PR check
+        uses: contractual-dev/contractual@v1
+        with:
+          mode: pr-check
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          fail-on-breaking: true   # This is already the default. Shown here for clarity.
+```
+
+Make this check a required status check in your repository settings under **Branch protection rules** for your main branch. Marking it required means GitHub will not allow the merge button to activate until the check passes.
+
+<Aside type="caution">
+`fail-on-breaking: true` blocks the merge at the CI level. It does not prevent someone with bypass permissions from merging directly. For complete enforcement, combine it with branch protection requiring all checks to pass and disabling bypass for administrators.
+</Aside>
+
+## What the PR author sees when a breaking change is detected
+
+When a PR introduces a breaking change, the Action posts a comment like this:
+
+```
+## Contractual: Breaking changes detected
+
+| Contract     | Change                              | Classification |
+|--------------|-------------------------------------|----------------|
+| orders-api   | DELETE /orders/{id} removed         | BREAKING       |
+| orders-api   | GET /orders: status field removed   | BREAKING       |
+
+A changeset has been committed to this branch: .contractual/changesets/brave-wolf-leaps.md
+
+To proceed, you must either:
+- Revert the breaking change, or
+- Review and acknowledge the changeset (see below)
+
+Workflow failed: fail-on-breaking is true.
+```
+
+The auto-generated changeset file carries a `major` bump. The PR author needs to take deliberate action before the merge can go through.
+
+## Handling exceptions: the changeset override mechanism
+
+Sometimes a breaking change is intentional and the team has decided to accept it. In that case, the PR author edits the changeset file that Contractual committed to the branch.
+
+Open `.contractual/changesets/brave-wolf-leaps.md`:
+
+```markdown
+---
+"orders-api": major
+---
+
+Removed DELETE /orders/{id} endpoint and the status field from GET /orders.
+```
+
+The changeset already has `major`, which is correct. The override mechanism here is not about changing the bump level — it is about acknowledging the change by pushing the changeset file with a meaningful description. Once the author pushes a commit with a description that explains the rationale, the team can review and approve the PR explicitly.
+
+If the auto-detected bump was `minor` but the team decides the change should be treated as breaking:
+
+```markdown
+---
+"orders-api": major   ← override: change minor → major
+---
+
+Renamed field customerId to customer_id. Structurally non-breaking
+(both names exist during transition), but all consumers must update
+their code before the old field is removed. Treat as major to signal
+consumer action required.
+```
+
+<Aside type="note">
+The changeset file is what gets reviewed during code review. The bump level in the frontmatter is the human decision, not just the machine decision. Changing it is the override mechanism.
+</Aside>
+
+## Temporarily disabling `fail-on-breaking` for a single PR
+
+If your team has an emergency fix that must merge despite a breaking change and you cannot wait for a proper review, you can merge with a bypass — but that requires repository admin access. A better approach is to set `fail-on-breaking: false` for a specific workflow run using a workflow dispatch trigger:
+
+```yaml
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+  workflow_dispatch:
+    inputs:
+      fail-on-breaking:
+        description: "Fail if breaking changes are detected"
+        type: boolean
+        default: true
+
+jobs:
+  contractual-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.head_ref }}
+
+      - uses: contractual-dev/contractual@v1
+        with:
+          mode: pr-check
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          fail-on-breaking: ${{ inputs.fail-on-breaking || true }}
+```
+
+## Deprecation-first workflow
+
+The cleanest way to enforce no breaking changes is to never make them. The deprecation-first workflow means:
+
+1. Mark the old field or endpoint as deprecated in the spec
+2. Add the replacement field or endpoint alongside it
+3. Release the new version — consumers migrate at their own pace
+4. After a documented migration window, remove the deprecated field in a separate PR
+
+This approach means the `fail-on-breaking: true` check never fires for intentional removals — they happen in a separate, clearly communicated release after consumers have already migrated.
+
+### OpenAPI deprecation example
+
+```yaml
+paths:
+  /orders/{id}:
+    get:
+      operationId: getOrder
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Order"
+
+components:
+  schemas:
+    Order:
+      type: object
+      properties:
+        # Deprecated: use customer_id instead. Will be removed in 3.0.0.
+        customerId:
+          type: string
+          deprecated: true
+          description: "Deprecated. Use customer_id."
+        customer_id:
+          type: string
+          description: "Customer identifier. Replaces customerId."
+```
+
+The `deprecated: true` marker surfaces in generated documentation and clients. Contractual does not classify deprecation as a breaking change, so this PR passes the check cleanly.
+
+### JSON Schema deprecation example
+
+JSON Schema does not have a first-class `deprecated` keyword in Draft 07, but you can use a custom extension:
+
+```json
+{
+  "properties": {
+    "customerId": {
+      "type": "string",
+      "description": "Deprecated. Use customer_id. Will be removed in v3.",
+      "x-deprecated": true
+    },
+    "customer_id": {
+      "type": "string",
+      "description": "Customer identifier."
+    }
+  }
+}
+```
+
+<Aside type="tip">
+Document your deprecation window in the changelog entry. A clear "This field will be removed in 3.0.0, to be released no earlier than 2026-06-01" gives consumers a concrete target.
+</Aside>
+
+## Reporting breaking changes without blocking
+
+For internal APIs where you control all consumers, you may want to report breaking changes in PR comments without blocking the merge. Set `fail-on-breaking: false`:
+
+```yaml
+- uses: contractual-dev/contractual@v1
+  with:
+    mode: pr-check
+    github-token: ${{ secrets.GITHUB_TOKEN }}
+    fail-on-breaking: false   # Report but do not block
+```
+
+With this setting, the PR comment still shows the diff table and Contractual still commits the `major` changeset to the branch. The difference is that the workflow exits with code `0` regardless of what was detected. The Version Contracts PR will still bump the version as `major`.
+
+## Summary: policy options
+
+| Policy | Config | Use when |
+|---|---|---|
+| Block all breaking changes | `fail-on-breaking: true` (default) | Public APIs with external consumers |
+| Report but do not block | `fail-on-breaking: false` | Internal APIs where you control all consumers |
+| Deprecation-first | `fail-on-breaking: true` + deprecate before removing | Long-lived public APIs with many consumers |
+
+## Next steps
+
+- [GitHub Action Setup](/guides/github-action) — complete reference for the `fail-on-breaking` input and other workflow options
+- [Managing Versions](/guides/versioning) — how to override changeset bump levels
+- [Pre-release Workflow](/recipes/pre-release) — test breaking changes on alpha/beta versions before releasing to stable

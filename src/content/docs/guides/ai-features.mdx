@@ -1,0 +1,204 @@
+---
+title: AI-Powered Features
+description: Set up Claude-powered changelog enrichment, PR explanations, and spec enhancement suggestions. All features are optional and degrade gracefully.
+---
+
+import { Tabs, TabItem, Aside } from '@astrojs/starlight/components';
+
+Contractual integrates with the Anthropic API to add three optional AI features: human-readable PR explanations, enriched changelog entries, and spec improvement suggestions. Every feature is opt-in, disabled by default, and designed to degrade gracefully — if the API key is absent, Contractual continues to work without any AI output.
+
+## Available features
+
+| Feature | Config field | What it does |
+|---|---|---|
+| **Explain** | `ai.explain: true` | Adds a plain-English explanation of detected changes to the PR comment. Explains why a change is breaking, what consumers need to do, and the migration path. |
+| **Changelog** | `ai.changelog: true` | Writes changelog entries in natural language rather than the default machine-generated format. More readable for end-users of your API. |
+| **Enhance** | `ai.enhance: true` | Suggests improvements to spec descriptions, examples, and documentation fields as a separate PR review comment. Does not modify files. |
+
+## Setup
+
+### 1. Get an Anthropic API key
+
+Create an account at [console.anthropic.com](https://console.anthropic.com) and generate an API key.
+
+### 2. Add the key as a GitHub Actions secret
+
+In your repository: Settings → Secrets and variables → Actions → New repository secret.
+
+- Name: `ANTHROPIC_API_KEY`
+- Value: your key starting with `sk-ant-`
+
+### 3. Pass the key to the Action
+
+```yaml
+- name: Run Contractual PR check
+  uses: contractual-dev/contractual@v1
+  with:
+    mode: pr-check
+    github-token: ${{ secrets.GITHUB_TOKEN }}
+    anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
+```
+
+### 4. Enable features in `contractual.yaml`
+
+```yaml
+# yaml-language-server: $schema=https://contractual.dev/schema.json
+
+contracts:
+  - name: orders-api
+    type: openapi
+    spec: ./specs/orders.openapi.yaml
+
+ai:
+  explain: true       # AI explanation in PR comments
+  changelog: true     # AI-enriched changelog entries
+  enhance: false      # Spec improvement suggestions (disabled)
+```
+
+## With vs without API key
+
+Contractual checks for `ANTHROPIC_API_KEY` at runtime — both in the CLI and in the GitHub Action.
+
+| Scenario | Behavior |
+|---|---|
+| Key present, `ai.explain: true` | PR comment includes AI explanation section |
+| Key present, `ai.changelog: true` | Changelog entries written by Claude |
+| Key absent, any AI field enabled | AI steps are skipped with a warning; all other steps proceed normally |
+| Key absent, all AI fields disabled | Identical to default behavior — no AI calls, no warning |
+
+No configuration change is needed to disable AI features at runtime — removing the secret or unsetting the environment variable is sufficient.
+
+<Aside type="note">
+The `ANTHROPIC_API_KEY` environment variable also works locally. Set it in your shell before running `contractual changeset` or `contractual version` to get AI features in CLI mode.
+</Aside>
+
+## Example PR comment with AI explanation
+
+Without AI, the PR comment shows only the diff table:
+
+```
+## Contractual: Contract Changes
+
+| Contract    | Change              | Classification |
+|-------------|---------------------|----------------|
+| orders-api  | Removed GET /orders/{id}/details | BREAKING (major) |
+| orders-api  | Changed type: amount string → number | BREAKING (major) |
+```
+
+With `ai.explain: true`, an explanation section is appended:
+
+```
+## Contractual: Contract Changes
+
+| Contract    | Change              | Classification |
+|-------------|---------------------|----------------|
+| orders-api  | Removed GET /orders/{id}/details | BREAKING (major) |
+| orders-api  | Changed type: amount string → number | BREAKING (major) |
+
+---
+
+### What changed and why it matters
+
+**Removed endpoint: GET /orders/{id}/details**
+
+This endpoint has been removed entirely. Any consumer calling
+`GET /orders/{id}/details` will receive a 404 after this change ships.
+
+**Migration path:** The response fields previously returned by this endpoint
+are now included in the main `GET /orders/{id}` response under the `details`
+object. Update your client to call the main endpoint and access `response.details`.
+
+**Changed field type: `amount` (string → number)**
+
+The `amount` field in Order responses has changed from a string (e.g. `"12.50"`)
+to a number (e.g. `12.5`). Consumers that parse `amount` as a string or use
+string formatting will need to update their parsing logic.
+
+**Migration path:** Treat `amount` as a floating-point number. For display
+purposes, use your language's number formatting utilities (e.g. `toFixed(2)`
+in JavaScript, `"{:.2f}".format(amount)` in Python).
+```
+
+## Example AI-enriched changelog entry
+
+Without AI (`ai.changelog: false`), `CHANGELOG.md` entries are machine-generated:
+
+```markdown
+## orders-api v2.0.0 (2024-11-15)
+
+### Breaking Changes
+
+- Removed endpoint: GET /orders/{id}/details
+- Changed field type: amount string → number
+```
+
+With `ai.changelog: true`, entries are written by Claude:
+
+```markdown
+## orders-api v2.0.0 (2024-11-15)
+
+### Breaking Changes
+
+**Order details consolidated into the main endpoint**
+
+The `GET /orders/{id}/details` endpoint has been removed. Order detail
+fields are now part of the standard `GET /orders/{id}` response, reducing
+the number of API calls needed to build an order detail view.
+
+To migrate: replace calls to `/orders/{id}/details` with `/orders/{id}`
+and access the same fields under `response.details`.
+
+**Order amount is now a number**
+
+The `amount` field has changed from a formatted string (`"12.50"`) to a
+numeric value (`12.5`). This allows direct arithmetic without parsing and
+aligns with the data types used in our other financial fields.
+
+To migrate: update any code that treats `amount` as a string.
+```
+
+## Cost expectations
+
+Contractual uses Claude Haiku by default for AI features — the fastest and lowest-cost model in the Anthropic family.
+
+Approximate token usage per PR:
+
+| Feature | Prompt tokens | Output tokens | Approximate cost |
+|---|---|---|---|
+| `explain` (small diff, 1-3 changes) | ~800 | ~400 | ~$0.001 |
+| `explain` (large diff, 10+ changes) | ~2,000 | ~1,000 | ~$0.003 |
+| `changelog` (per contract, per version) | ~600 | ~300 | ~$0.001 |
+| `enhance` (per contract) | ~1,500 | ~800 | ~$0.003 |
+
+For a typical team with 20 PRs per week that touch specs, total AI cost is approximately $0.05–$0.20 per week. Costs scale with the number of changes per PR, not with the number of PRs.
+
+<Aside type="tip">
+Monitor your usage in the [Anthropic console](https://console.anthropic.com). You can set spend limits and usage alerts to prevent unexpected charges.
+</Aside>
+
+## Privacy
+
+Contractual sends the following data to the Anthropic API:
+
+- The **diff output** from your linter and differ (the list of detected changes)
+- The **spec file contents** for contracts where `ai.enhance: true` is set
+- The **contract name** and **version**
+
+Contractual does not send:
+
+- Git history or commit messages
+- Pull request titles or descriptions
+- Code outside of spec files
+- Secrets or environment variables
+
+<Aside type="caution">
+If your spec files contain sensitive information — internal service names, security scheme details, or proprietary data models — review Anthropic's [data privacy policy](https://www.anthropic.com/privacy) before enabling AI features. For most API specs that are intended to be consumer-facing, sharing the spec content with an LLM is consistent with the document's purpose.
+</Aside>
+
+All API calls use HTTPS. Anthropic does not train models on API input by default — confirm current policy terms for your organization if this matters.
+
+## Next steps
+
+- [Configuration](/guides/configuration) — full `ai` section reference
+- [GitHub Action Setup](/guides/github-action) — `anthropic-api-key` input for the Action
+- [Managing Versions](/guides/versioning) — how AI-enriched changelog entries appear in `CHANGELOG.md`
